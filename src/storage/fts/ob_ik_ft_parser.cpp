@@ -19,8 +19,6 @@
 #include "src/storage/fts/ob_ik_ft_parser.h"
 
 #include "lib/charset/ob_charset.h"
-#include "lib/allocator/page_arena.h"
-#include "lib/lock/ob_mutex.h"
 #include "lib/ob_errno.h"
 #include "lib/oblog/ob_log_module.h"
 #include "lib/utility/ob_macro_utils.h"
@@ -37,8 +35,6 @@
 #include "storage/fts/ik/ob_ik_processor.h"
 #include "storage/fts/ik/ob_ik_quantifier_processor.h"
 #include "storage/fts/ik/ob_ik_surrogate_processor.h"
-
-#include <atomic>
 
 namespace oceanbase
 {
@@ -142,7 +138,7 @@ int ObIKFTParser::process_one_char(TokenizeContext &ctx,
   for (ObList<ObIIKProcessor *, ObIAllocator>::iterator iter = segmenters_.begin();
        OB_SUCC(ret) && iter != segmenters_.end();
        iter++) {
-    if (OB_FAIL((*iter)->process(ctx, ch, char_len, type))) {
+    if (OB_FAIL((*iter)->process(ctx))) {
     }
   }
   return ret;
@@ -194,23 +190,84 @@ int ObIKFTParser::process_next_batch()
   return ret;
 }
 
+namespace {
+
+// Building the dictionary views and the processor chain costs more than tokenizing
+// a short document, and none of it depends on the text. Keep one warm parser per
+// thread and re-arm it with reuse_ctx() instead of rebuilding it per call.
+//
+// The arena is deliberately never destroyed by hand: if it outlives the parser the
+// parser is simply never destructed, which also keeps it from releasing KVCache
+// handles during a shutdown that may already have torn the cache down.
+ObArenaAllocator &tls_parser_alloc()
+{
+  static thread_local ObArenaAllocator alloc(ObMemAttr("IKFTParserTLS"));
+  return alloc;
+}
+
+ObIKFTParser *&tls_parser_slot()
+{
+  static thread_local ObIKFTParser *parser = nullptr;
+  return parser;
+}
+
+// Guards against re-entering segment() from within a tokenize call: the nested call
+// must not clobber the parser the outer one is still iterating over.
+bool &tls_parser_busy()
+{
+  static thread_local bool busy = false;
+  return busy;
+}
+
+}  // namespace
+
 int ObIKFTParserDesc::segment(ObFTParserParam *param, ObITokenIterator *&iter) const
 {
   int ret = OB_SUCCESS;
-  ObIKFTParser *parser = nullptr;
   ObFTDictHub *hub = nullptr;
   if (OB_ISNULL(param) || OB_UNLIKELY(!param->is_valid())) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(ObFTParseData::instance().get_dict_hub(hub))) {
-  } else if (OB_ISNULL(parser = OB_NEWx(ObIKFTParser, param->allocator_, *(param->allocator_), hub))) {
-    ret = OB_ALLOCATE_MEMORY_FAILED;
-  } else if (OB_FAIL(parser->init(*param))) {
   } else {
-    iter = parser;
-  }
-
-  if (OB_FAIL(ret)) {
-    OB_DELETEx(ObIKFTParser, param->allocator_, parser);
+    ObIKFTParser *&cached = tls_parser_slot();
+    bool reused = false;
+    if (!tls_parser_busy() && !OB_ISNULL(cached) && cached->is_collation_compatible(*param)) {
+      if (OB_SUCCESS == cached->reuse_ctx(*param)) {
+        reused = true;
+        tls_parser_busy() = true;
+        iter = cached;
+      }
+    }
+    if (!reused) {
+      if (tls_parser_busy()) {
+        // Re-entrant call: keep the pre-existing per-call allocation.
+        ObIKFTParser *parser = nullptr;
+        if (OB_ISNULL(parser = OB_NEWx(ObIKFTParser, param->allocator_, *(param->allocator_), hub))) {
+          ret = OB_ALLOCATE_MEMORY_FAILED;
+        } else if (OB_FAIL(parser->init(*param))) {
+          OB_DELETEx(ObIKFTParser, param->allocator_, parser);
+        } else {
+          iter = parser;
+        }
+      } else {
+        ObArenaAllocator &alloc = tls_parser_alloc();
+        ObIKFTParser *parser = nullptr;
+        if (!OB_ISNULL(cached)) {
+          cached->~ObIKFTParser();
+          cached = nullptr;
+          alloc.reset();
+        }
+        if (OB_ISNULL(parser = OB_NEWx(ObIKFTParser, &alloc, alloc, hub))) {
+          ret = OB_ALLOCATE_MEMORY_FAILED;
+        } else if (OB_FAIL(parser->init(*param))) {
+          OB_DELETEx(ObIKFTParser, &alloc, parser);
+        } else {
+          cached = parser;
+          tls_parser_busy() = true;
+          iter = parser;
+        }
+      }
+    }
   }
 
   return ret;
@@ -219,8 +276,17 @@ int ObIKFTParserDesc::segment(ObFTParserParam *param, ObITokenIterator *&iter) c
 void ObIKFTParserDesc::free_token_iter(ObFTParserParam *param,
                                        ObITokenIterator *&iter) const
 {
-  iter->~ObITokenIterator();
-  param->allocator_->free(iter);
+  if (OB_ISNULL(iter)) {
+    // nothing to release
+  } else if (iter == static_cast<ObITokenIterator *>(tls_parser_slot())) {
+    // Cached parser: only hand the slot back, the object stays warm.
+    tls_parser_busy() = false;
+    iter = nullptr;
+  } else {
+    iter->~ObITokenIterator();
+    param->allocator_->free(iter);
+    iter = nullptr;
+  }
 }
 
 
@@ -232,116 +298,6 @@ int ObIKFTParserDesc::get_add_word_flag(ObAddWordFlag &flag) const
   return ret;
 }
 
-// Built-in IK dictionaries are immutable after initialization, while ObIKFTParser used to
-// load the KV-cache ranges and rebuild the range dictionaries for every document (and for
-// every TOKENIZE()/index-build row).  Share one initialized copy per process instead.
-namespace
-{
-class ObIKSharedDicts
-{
-public:
-  static ObIKSharedDicts &instance()
-  {
-    static ObIKSharedDicts shared_dicts;
-    return shared_dicts;
-  }
-
-  int get(ObIFTDict *&main_dict, ObIFTDict *&quan_dict, ObIFTDict *&stop_dict)
-  {
-    int ret = OB_SUCCESS;
-    if (ready_.load(std::memory_order_acquire)) {
-      main_dict = main_dict_;
-      quan_dict = quan_dict_;
-      stop_dict = stop_dict_;
-    } else {
-      lib::ObMutexGuard guard(mutex_);
-      if (!ready_.load(std::memory_order_acquire)) {
-        if (OB_FAIL(build(main_dict_, quan_dict_, stop_dict_))) {
-        } else {
-          ready_.store(true, std::memory_order_release);
-        }
-      }
-      if (OB_SUCC(ret)) {
-        main_dict = main_dict_;
-        quan_dict = quan_dict_;
-        stop_dict = stop_dict_;
-      }
-    }
-    return ret;
-  }
-
-private:
-  ObIKSharedDicts() : alloc_(lib::ObMemAttr("IKSharedDict")), mutex_()
-  {
-    main_dict_ = nullptr;
-    quan_dict_ = nullptr;
-    stop_dict_ = nullptr;
-    ready_.store(false);
-  }
-
-  int build_one(const ObFTDictDesc &desc, ObFTCacheRangeContainer *&container, ObIFTDict *&dict)
-  {
-    int ret = OB_SUCCESS;
-    ObFTDictHub *hub = nullptr;
-    if (OB_FAIL(ObFTParseData::instance().get_dict_hub(hub))) {
-    } else if (OB_ISNULL(hub)) {
-      ret = OB_ERR_UNEXPECTED;
-    } else if (OB_ISNULL(container = OB_NEWx(ObFTCacheRangeContainer, &alloc_, alloc_))) {
-      ret = OB_ALLOCATE_MEMORY_FAILED;
-    } else if (OB_FAIL(hub->load_cache(desc, *container))) {
-      if (OB_ENTRY_NOT_EXIST == ret) {
-        ret = OB_SUCCESS;
-        if (OB_FAIL(hub->build_cache(desc, *container))) {
-        }
-      }
-    }
-    if (OB_FAIL(ret)) {
-    } else if (OB_ISNULL(dict = OB_NEWx(ObFTRangeDict, &alloc_, alloc_, container, desc))) {
-      ret = OB_ALLOCATE_MEMORY_FAILED;
-    } else if (OB_FAIL(dict->init())) {
-      OB_DELETEx(ObIFTDict, &alloc_, dict);
-      dict = nullptr;
-    }
-    return ret;
-  }
-
-  int build(ObIFTDict *&main_dict, ObIFTDict *&quan_dict, ObIFTDict *&stop_dict)
-  {
-    int ret = OB_SUCCESS;
-    ObFTCacheRangeContainer *main_container = nullptr;
-    ObFTCacheRangeContainer *quan_container = nullptr;
-    ObFTCacheRangeContainer *stop_container = nullptr;
-
-    ObFTDictDesc main_dict_desc("main_dict",
-                                ObFTDictType::DICT_IK_MAIN,
-                                ObCharsetType::CHARSET_UTF8MB4,
-                                ObCollationType::CS_TYPE_UTF8MB4_BIN);
-    ObFTDictDesc quan_dict_desc("quan_dict",
-                                ObFTDictType::DICT_IK_QUAN,
-                                ObCharsetType::CHARSET_UTF8MB4,
-                                ObCollationType::CS_TYPE_UTF8MB4_BIN);
-    ObFTDictDesc stopword_dict_desc("stopword",
-                                    ObFTDictType::DICT_IK_STOP,
-                                    ObCharsetType::CHARSET_UTF8MB4,
-                                    ObCollationType::CS_TYPE_UTF8MB4_BIN);
-
-    if (OB_FAIL(build_one(main_dict_desc, main_container, main_dict))) {
-    } else if (OB_FAIL(build_one(quan_dict_desc, quan_container, quan_dict))) {
-    } else if (OB_FAIL(build_one(stopword_dict_desc, stop_container, stop_dict))) {
-    }
-    return ret;
-  }
-
-private:
-  common::ObArenaAllocator alloc_;
-  lib::ObMutex mutex_;
-  ObIFTDict *main_dict_;
-  ObIFTDict *quan_dict_;
-  ObIFTDict *stop_dict_;
-  std::atomic<bool> ready_;
-};
-} // namespace
-
 int ObIKFTParser::init_dict(const ObFTParserParam &param)
 {
   int ret = OB_SUCCESS;
@@ -349,12 +305,6 @@ int ObIKFTParser::init_dict(const ObFTParserParam &param)
 
   if (OB_ISNULL(hub_)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (OB_FAIL(ObIKSharedDicts::instance().get(dict_main_, dict_quan_, dict_stop_))) {
-    LOG_WARN("failed to get shared ik dicts, fallback to per-parser dictionaries", K(ret));
-    ret = OB_SUCCESS;
-  } else {
-    dict_shared_ = true;
-    return ret;
   }
 
   ObFTRangeDict *dict = nullptr;
@@ -412,9 +362,9 @@ int ObIKFTParser::init_ctx(const ObFTParserParam &param)
   if (coll_type_ == common::CS_TYPE_INVALID) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_ISNULL(ctx_ = OB_NEWx(TokenizeContext,
-                                      &allocator_,
+                                      &ctx_alloc_,
                                       coll_type_,
-                                      allocator_,
+                                      ctx_alloc_,
                                       param.fulltext_,
                                       param.ft_length_,
                                       param.ik_param_.mode_ == ObFTIKParam::Mode::SMART))) {
@@ -422,7 +372,55 @@ int ObIKFTParser::init_ctx(const ObFTParserParam &param)
   } else if (OB_FAIL(ctx_->init())) {
   }
   if (OB_FAIL(ret)) {
-    OB_DELETEx(TokenizeContext, &allocator_, ctx_);
+    OB_DELETEx(TokenizeContext, &ctx_alloc_, ctx_);
+    ctx_ = nullptr;
+  }
+  return ret;
+}
+
+bool ObIKFTParser::is_collation_compatible(const ObFTParserParam &param) const
+{
+  bool compatible = false;
+  if (is_inited_ && !OB_ISNULL(param.cs_) && !OB_ISNULL(param.cs_->name)) {
+    compatible = (coll_type_ == ObCharset::collation_type(param.cs_->name));
+  }
+  return compatible;
+}
+
+int ObIKFTParser::reuse_ctx(const ObFTParserParam &param)
+{
+  int ret = OB_SUCCESS;
+  if (OB_UNLIKELY(!is_inited_)) {
+    ret = OB_NOT_INIT;
+  } else if (OB_UNLIKELY(!is_collation_compatible(param))) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    // The processors keep the offsets of the document they were last fed, so they
+    // have to be cleared before the new text is walked.
+    for (ObIIKProcessor *segmenter : segmenters_) {
+      if (!OB_ISNULL(segmenter)) {
+        segmenter->reset_state();
+      }
+    }
+    // Drop the previous document's tokens first: the arena can only be released
+    // as a whole, so nothing may still reference it when it is reset.
+    if (!OB_ISNULL(ctx_)) {
+      ctx_->~TokenizeContext();
+      ctx_ = nullptr;
+    }
+    ctx_alloc_.reset();
+    if (OB_ISNULL(ctx_ = OB_NEWx(TokenizeContext,
+                                 &ctx_alloc_,
+                                 coll_type_,
+                                 ctx_alloc_,
+                                 param.fulltext_,
+                                 param.ft_length_,
+                                 param.ik_param_.mode_ == ObFTIKParam::Mode::SMART))) {
+      ret = OB_ALLOCATE_MEMORY_FAILED;
+    } else if (OB_FAIL(ctx_->init())) {
+      OB_DELETEx(TokenizeContext, &ctx_alloc_, ctx_);
+      ctx_ = nullptr;
+    }
   }
   return ret;
 }
@@ -471,8 +469,9 @@ void ObIKFTParser::reset()
 {
   if (!OB_ISNULL(ctx_)) {
     ctx_->~TokenizeContext();
-    allocator_.free(ctx_);
+    ctx_ = nullptr;
   }
+  ctx_alloc_.reset();
 
   for (ObIIKProcessor *segmenter : segmenters_) {
     if (!OB_ISNULL(segmenter)) {
@@ -486,28 +485,17 @@ void ObIKFTParser::reset()
   cache_quan_.reset();
   cache_stop_.reset();
 
-  if (dict_shared_) {
-    // Owned by the process-wide shared dictionary cache, do not free here.
-    dict_main_ = nullptr;
-    dict_quan_ = nullptr;
-    dict_stop_ = nullptr;
-    dict_shared_ = false;
-  } else {
-    if (!OB_ISNULL(dict_main_)) {
-      dict_main_->~ObIFTDict();
-      allocator_.free(dict_main_);
-    }
-    if (!OB_ISNULL(dict_quan_)) {
-      dict_quan_->~ObIFTDict();
-      allocator_.free(dict_quan_);
-    }
-    if (!OB_ISNULL(dict_stop_)) {
-      dict_stop_->~ObIFTDict();
-      allocator_.free(dict_stop_);
-    }
-    dict_main_ = nullptr;
-    dict_quan_ = nullptr;
-    dict_stop_ = nullptr;
+  if (!OB_ISNULL(dict_main_)) {
+    dict_main_->~ObIFTDict();
+    allocator_.free(dict_main_);
+  }
+  if (!OB_ISNULL(dict_quan_)) {
+    dict_quan_->~ObIFTDict();
+    allocator_.free(dict_quan_);
+  }
+  if (!OB_ISNULL(dict_stop_)) {
+    dict_stop_->~ObIFTDict();
+    allocator_.free(dict_stop_);
   }
 
   is_inited_ = false;
