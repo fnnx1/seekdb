@@ -547,10 +547,28 @@ int ObDASIndexMergeIter::compare(int64_t cur_idx, int64_t &output_idx, int &cmp_
       const ObExpr *expr = rowkey_exprs_->at(i);
       if (OB_ISNULL(expr)) {
         ret = OB_ERR_UNEXPECTED;
+      } else if ((ObIntType == expr->obj_meta_.get_type()
+                  || ObUInt64Type == expr->obj_meta_.get_type())
+                 && !cur_datums[i].is_null()
+                 && !output_datums[i].is_null()) {
+        // Integer rowkeys are compared straight on the datums. Building two ObObj
+        // wrappers and running the collation aware comparison for every merged row
+        // is pure overhead when the rowkey is a plain integer, and it dominates the
+        // cost of merging a few thousand rows.
+        if (ObUInt64Type == expr->obj_meta_.get_type()) {
+          const uint64_t cur_val = cur_datums[i].get_uint64();
+          const uint64_t output_val = output_datums[i].get_uint64();
+          cmp_ret = cur_val < output_val ? -1 : (cur_val > output_val ? 1 : 0);
+        } else {
+          const int64_t cur_val = cur_datums[i].get_int();
+          const int64_t output_val = output_datums[i].get_int();
+          cmp_ret = cur_val < output_val ? -1 : (cur_val > output_val ? 1 : 0);
+        }
       } else if (OB_FAIL(cur_datums[i].to_obj(cur_obj, expr->obj_meta_, expr->obj_datum_map_))) {
       } else if (OB_FAIL(output_datums[i].to_obj(output_obj, expr->obj_meta_, expr->obj_datum_map_))) {
       } else if (OB_FAIL(cur_obj.check_collation_free_and_compare(output_obj, cmp_ret))) {
-      } else if (cmp_ret != 0) {
+      }
+      if (OB_SUCC(ret) && cmp_ret != 0) {
         if (cmp_ret < 0) {
           output_idx = OB_UNLIKELY(is_reverse_) ? output_idx : cur_idx;
         } else {
