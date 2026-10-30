@@ -1047,7 +1047,13 @@ int ObFtsIndexBuilderUtil::decide_parallelism(
       case share::schema::ObIndexType::INDEX_TYPE_DOC_ID_ROWKEY_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_FTS_INDEX_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_FTS_DOC_WORD_LOCAL:
-        decided_parallelism = MAX(original_parallelism / 3, 1L);
+        // Building a fulltext index is dominated by tokenizing and by writing
+        // the doc-word table, and both scale with the number of scanner
+        // threads. The statement that creates the index usually carries no
+        // parallel hint, so the degree reaching this point is 1 and the whole
+        // build runs on a single thread no matter how many cores are free.
+        // Keep a floor so the build can use the machine it is given.
+        decided_parallelism = MAX(original_parallelism, 8L);
         break;
       case share::schema::ObIndexType::INDEX_TYPE_NORMAL_MULTIVALUE_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_UNIQUE_MULTIVALUE_LOCAL:
