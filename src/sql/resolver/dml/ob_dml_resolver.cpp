@@ -2724,6 +2724,10 @@ int ObDMLResolver::resolve_table(const ParseNode &parse_tree,
         }
         break;
       }
+      case T_FILE_TABLE_EXPRESSION: {
+        ret = resolve_file_table_item(*table_node, table_item);
+        break;
+      }
       default:
         /* won't be here */
         ret = OB_ERR_PARSER_SYNTAX;

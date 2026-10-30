@@ -45,6 +45,7 @@ SQL_RUNTIME_NATIVE_DEPS = [
     "//src/query:sql_expression_interface",
     "//src/query:vector_index_interface",
     "//src/share:_generated_inner_table_headers",
+    "//src/share:ai_column_interface",
     "//src/share:ai_endpoint_interface",
     "//src/share:autoincrement_runtime",
     "//src/share:max_id_allocation",

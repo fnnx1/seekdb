@@ -59,10 +59,12 @@ public:
   virtual ~ObTextDaaTIter() { reset(); }
 
   int init(const ObTextDaaTParam &param);
+  virtual int get_next_rows(const int64_t capacity, int64_t &count) override;
   virtual void reuse(const bool switch_tablet = false) override;
   virtual void reset() override;
 protected:
   virtual int pre_process() override;
+  int get_short_union_rows(const int64_t capacity, int64_t &count);
 protected:
   ObBM25ParamEstimator bm25_param_estimator_;
   sql::ObMatchAgainstMode mode_flag_;

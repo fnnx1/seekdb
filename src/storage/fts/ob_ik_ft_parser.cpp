@@ -19,6 +19,8 @@
 #include "src/storage/fts/ob_ik_ft_parser.h"
 
 #include "lib/charset/ob_charset.h"
+#include "lib/allocator/page_arena.h"
+#include "lib/lock/ob_mutex.h"
 #include "lib/ob_errno.h"
 #include "lib/oblog/ob_log_module.h"
 #include "lib/utility/ob_macro_utils.h"
@@ -35,6 +37,8 @@
 #include "storage/fts/ik/ob_ik_processor.h"
 #include "storage/fts/ik/ob_ik_quantifier_processor.h"
 #include "storage/fts/ik/ob_ik_surrogate_processor.h"
+
+#include <atomic>
 
 namespace oceanbase
 {
@@ -138,7 +142,7 @@ int ObIKFTParser::process_one_char(TokenizeContext &ctx,
   for (ObList<ObIIKProcessor *, ObIAllocator>::iterator iter = segmenters_.begin();
        OB_SUCC(ret) && iter != segmenters_.end();
        iter++) {
-    if (OB_FAIL((*iter)->process(ctx))) {
+    if (OB_FAIL((*iter)->process(ctx, ch, char_len, type))) {
     }
   }
   return ret;
@@ -228,6 +232,116 @@ int ObIKFTParserDesc::get_add_word_flag(ObAddWordFlag &flag) const
   return ret;
 }
 
+// Built-in IK dictionaries are immutable after initialization, while ObIKFTParser used to
+// load the KV-cache ranges and rebuild the range dictionaries for every document (and for
+// every TOKENIZE()/index-build row).  Share one initialized copy per process instead.
+namespace
+{
+class ObIKSharedDicts
+{
+public:
+  static ObIKSharedDicts &instance()
+  {
+    static ObIKSharedDicts shared_dicts;
+    return shared_dicts;
+  }
+
+  int get(ObIFTDict *&main_dict, ObIFTDict *&quan_dict, ObIFTDict *&stop_dict)
+  {
+    int ret = OB_SUCCESS;
+    if (ready_.load(std::memory_order_acquire)) {
+      main_dict = main_dict_;
+      quan_dict = quan_dict_;
+      stop_dict = stop_dict_;
+    } else {
+      lib::ObMutexGuard guard(mutex_);
+      if (!ready_.load(std::memory_order_acquire)) {
+        if (OB_FAIL(build(main_dict_, quan_dict_, stop_dict_))) {
+        } else {
+          ready_.store(true, std::memory_order_release);
+        }
+      }
+      if (OB_SUCC(ret)) {
+        main_dict = main_dict_;
+        quan_dict = quan_dict_;
+        stop_dict = stop_dict_;
+      }
+    }
+    return ret;
+  }
+
+private:
+  ObIKSharedDicts() : alloc_(lib::ObMemAttr("IKSharedDict")), mutex_()
+  {
+    main_dict_ = nullptr;
+    quan_dict_ = nullptr;
+    stop_dict_ = nullptr;
+    ready_.store(false);
+  }
+
+  int build_one(const ObFTDictDesc &desc, ObFTCacheRangeContainer *&container, ObIFTDict *&dict)
+  {
+    int ret = OB_SUCCESS;
+    ObFTDictHub *hub = nullptr;
+    if (OB_FAIL(ObFTParseData::instance().get_dict_hub(hub))) {
+    } else if (OB_ISNULL(hub)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_ISNULL(container = OB_NEWx(ObFTCacheRangeContainer, &alloc_, alloc_))) {
+      ret = OB_ALLOCATE_MEMORY_FAILED;
+    } else if (OB_FAIL(hub->load_cache(desc, *container))) {
+      if (OB_ENTRY_NOT_EXIST == ret) {
+        ret = OB_SUCCESS;
+        if (OB_FAIL(hub->build_cache(desc, *container))) {
+        }
+      }
+    }
+    if (OB_FAIL(ret)) {
+    } else if (OB_ISNULL(dict = OB_NEWx(ObFTRangeDict, &alloc_, alloc_, container, desc))) {
+      ret = OB_ALLOCATE_MEMORY_FAILED;
+    } else if (OB_FAIL(dict->init())) {
+      OB_DELETEx(ObIFTDict, &alloc_, dict);
+      dict = nullptr;
+    }
+    return ret;
+  }
+
+  int build(ObIFTDict *&main_dict, ObIFTDict *&quan_dict, ObIFTDict *&stop_dict)
+  {
+    int ret = OB_SUCCESS;
+    ObFTCacheRangeContainer *main_container = nullptr;
+    ObFTCacheRangeContainer *quan_container = nullptr;
+    ObFTCacheRangeContainer *stop_container = nullptr;
+
+    ObFTDictDesc main_dict_desc("main_dict",
+                                ObFTDictType::DICT_IK_MAIN,
+                                ObCharsetType::CHARSET_UTF8MB4,
+                                ObCollationType::CS_TYPE_UTF8MB4_BIN);
+    ObFTDictDesc quan_dict_desc("quan_dict",
+                                ObFTDictType::DICT_IK_QUAN,
+                                ObCharsetType::CHARSET_UTF8MB4,
+                                ObCollationType::CS_TYPE_UTF8MB4_BIN);
+    ObFTDictDesc stopword_dict_desc("stopword",
+                                    ObFTDictType::DICT_IK_STOP,
+                                    ObCharsetType::CHARSET_UTF8MB4,
+                                    ObCollationType::CS_TYPE_UTF8MB4_BIN);
+
+    if (OB_FAIL(build_one(main_dict_desc, main_container, main_dict))) {
+    } else if (OB_FAIL(build_one(quan_dict_desc, quan_container, quan_dict))) {
+    } else if (OB_FAIL(build_one(stopword_dict_desc, stop_container, stop_dict))) {
+    }
+    return ret;
+  }
+
+private:
+  common::ObArenaAllocator alloc_;
+  lib::ObMutex mutex_;
+  ObIFTDict *main_dict_;
+  ObIFTDict *quan_dict_;
+  ObIFTDict *stop_dict_;
+  std::atomic<bool> ready_;
+};
+} // namespace
+
 int ObIKFTParser::init_dict(const ObFTParserParam &param)
 {
   int ret = OB_SUCCESS;
@@ -235,6 +349,12 @@ int ObIKFTParser::init_dict(const ObFTParserParam &param)
 
   if (OB_ISNULL(hub_)) {
     ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(ObIKSharedDicts::instance().get(dict_main_, dict_quan_, dict_stop_))) {
+    LOG_WARN("failed to get shared ik dicts, fallback to per-parser dictionaries", K(ret));
+    ret = OB_SUCCESS;
+  } else {
+    dict_shared_ = true;
+    return ret;
   }
 
   ObFTRangeDict *dict = nullptr;
@@ -366,17 +486,28 @@ void ObIKFTParser::reset()
   cache_quan_.reset();
   cache_stop_.reset();
 
-  if (!OB_ISNULL(dict_main_)) {
-    dict_main_->~ObIFTDict();
-    allocator_.free(dict_main_);
-  }
-  if (!OB_ISNULL(dict_quan_)) {
-    dict_quan_->~ObIFTDict();
-    allocator_.free(dict_quan_);
-  }
-  if (!OB_ISNULL(dict_stop_)) {
-    dict_stop_->~ObIFTDict();
-    allocator_.free(dict_stop_);
+  if (dict_shared_) {
+    // Owned by the process-wide shared dictionary cache, do not free here.
+    dict_main_ = nullptr;
+    dict_quan_ = nullptr;
+    dict_stop_ = nullptr;
+    dict_shared_ = false;
+  } else {
+    if (!OB_ISNULL(dict_main_)) {
+      dict_main_->~ObIFTDict();
+      allocator_.free(dict_main_);
+    }
+    if (!OB_ISNULL(dict_quan_)) {
+      dict_quan_->~ObIFTDict();
+      allocator_.free(dict_quan_);
+    }
+    if (!OB_ISNULL(dict_stop_)) {
+      dict_stop_->~ObIFTDict();
+      allocator_.free(dict_stop_);
+    }
+    dict_main_ = nullptr;
+    dict_quan_ = nullptr;
+    dict_stop_ = nullptr;
   }
 
   is_inited_ = false;

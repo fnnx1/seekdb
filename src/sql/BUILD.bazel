@@ -101,6 +101,7 @@ _SQL_INTERFACE_OBLIB_DEPS = [
 ]
 
 _SQL_PUBLIC_CLOSURE_SHARE_DEPS = [
+    "//src/share:ai_column_interface",
     "//src/share:autoincrement_runtime",
     "//src/share:est_row_count_record",
     "//src/share:interrupt_runtime",

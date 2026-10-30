@@ -19,12 +19,19 @@
 #include "sql/engine/basic/ob_values_table_access_op.h"
 #include "sql/engine/ob_exec_context.h"
 #include "sql/engine/expr/ob_obj_cast_runtime.h"
+#include "sql/engine/basic/file_scan_reader.h"
+#include "sql/resolver/ob_resolver_utils.h"
+#include <new>
 
 namespace oceanbase
 {
 using namespace common;
 namespace sql
 {
+struct FileScanRuntime {
+  FileScanReader reader;
+  std::vector<FileCell> row;
+};
 OB_SERIALIZE_MEMBER_INHERIT(ObValuesTableAccessSpec,
                             ObOpSpec,
                             access_type_,
@@ -38,7 +45,7 @@ ObValuesTableAccessOp::ObValuesTableAccessOp(ObExecContext &exec_ctx,
                                              const ObOpSpec &spec,
                                              ObOpInput *input)
   : ObOperator(exec_ctx, spec, input), datum_caster_(), cm_(CM_NONE),
-    row_idx_(0), row_cnt_(0) {}
+    row_idx_(0), row_cnt_(0), file_scan_(nullptr) {}
 
 int ObValuesTableAccessOp::inner_open()
 {
@@ -55,7 +62,9 @@ int ObValuesTableAccessOp::inner_open()
   } else {
     cm_ = cm_ | CM_COLUMN_CONVERT;
     if (OB_SUCC(ret)) {
-      if (ObValuesTableDef::FOLD_ACCESS_EXPR == MY_SPEC.access_type_) {
+      if (ObValuesTableDef::ACCESS_FILE == MY_SPEC.access_type_) {
+        ret = open_file_scan();
+      } else if (ObValuesTableDef::FOLD_ACCESS_EXPR == MY_SPEC.access_type_) {
         if (OB_UNLIKELY(MY_SPEC.start_param_idx_ < 0 ||
                         MY_SPEC.start_param_idx_ > MY_SPEC.end_param_idx_ ||
                         MY_SPEC.end_param_idx_ >= plan_ctx->get_param_store().count())) {
@@ -86,6 +95,10 @@ int ObValuesTableAccessOp::inner_rescan()
   if (OB_FAIL(ObOperator::inner_rescan())) {
   } else {
     row_idx_ = 0;
+    if (file_scan_ && !file_scan_->reader.rewind()) {
+      ret = OB_INVALID_ARGUMENT;
+      LOG_USER_ERROR(OB_INVALID_ARGUMENT, file_scan_->reader.error().c_str());
+    }
   }
   return ret;
 }
@@ -266,7 +279,9 @@ OB_INLINE int ObValuesTableAccessOp::calc_next_row()
   int64_t col_num = MY_SPEC.column_exprs_.count();
   int64_t col_idx = 0;
   ObPhysicalPlanCtx *plan_ctx = GET_PHY_PLAN_CTX(ctx_);
-  if (row_idx_ == row_cnt_) {
+  if (ObValuesTableDef::ACCESS_FILE == MY_SPEC.access_type_) {
+    return next_file_row();
+  } else if (row_idx_ == row_cnt_) {
     ret = OB_ITER_END;
   } else if (ObValuesTableDef::FOLD_ACCESS_EXPR == MY_SPEC.access_type_ &&
              OB_FAIL(plan_ctx->replace_batch_param_datum(row_idx_,
@@ -304,6 +319,10 @@ OB_INLINE int ObValuesTableAccessOp::calc_next_row()
           }
           break;
         }
+        case ObValuesTableDef::ACCESS_FILE: {
+          ret = OB_ERR_UNEXPECTED;
+          break;
+        }
       };
       col_idx++;
     } // while end
@@ -328,7 +347,135 @@ int ObValuesTableAccessOp::inner_close()
 {
   int ret = OB_SUCCESS;
   row_idx_ = 0;
+  close_file_scan();
   if (OB_FAIL(datum_caster_.destroy())) {
+  }
+  return ret;
+}
+
+void ObValuesTableAccessOp::close_file_scan()
+{
+  delete file_scan_;
+  file_scan_ = nullptr;
+}
+
+void ObValuesTableAccessOp::destroy()
+{
+  close_file_scan();
+  ObOperator::destroy();
+}
+
+int ObValuesTableAccessOp::open_file_scan()
+{
+  int ret = OB_SUCCESS;
+  ObObj enabled;
+  ObString secure_path;
+  if (MY_SPEC.obj_params_.count() != FILE_COLUMN_NAMES + MY_SPEC.column_exprs_.count()) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(GET_MY_SESSION(ctx_)->get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled))) {
+  } else if (!enabled.get_bool()) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL is disabled");
+  } else if (OB_FAIL(GET_MY_SESSION(ctx_)->get_secure_file_priv(secure_path))) {
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < MY_SPEC.obj_params_.count(); ++i) {
+    if (!MY_SPEC.obj_params_.at(i).is_varchar()) ret = OB_ERR_UNEXPECTED;
+  }
+  const auto text = [&](int64_t index) {
+    const ObString value = MY_SPEC.obj_params_.at(index).get_string();
+    return std::string(value.ptr() ? value.ptr() : "", value.length());
+  };
+  if (OB_SUCC(ret)) {
+    std::string canonical, error;
+    const bool resolved = text(FILE_FORMAT) == "glob"
+        ? FileScanReader::canonical_glob(text(FILE_PATH), canonical, error)
+        : FileScanReader::canonical_path(text(FILE_PATH), canonical, error);
+    if (!resolved) {
+      ret = OB_INVALID_ARGUMENT;
+      LOG_USER_ERROR(OB_INVALID_ARGUMENT, error.c_str());
+    } else if (canonical != text(FILE_PATH)) {
+      ret = OB_INVALID_ARGUMENT;
+      LOG_USER_ERROR(OB_INVALID_ARGUMENT, "file path changed after schema inference");
+    } else if (OB_FAIL(ObResolverUtils::check_secure_path(secure_path, ObString(static_cast<int32_t>(canonical.size()), canonical.data())))) {
+    } else if (text(FILE_DELIMITER).size() != 1 || text(FILE_QUOTE).size() != 1 || text(FILE_ESCAPE).size() != 1) {
+      ret = OB_ERR_UNEXPECTED;
+    } else {
+      close_file_scan();
+      file_scan_ = new (std::nothrow) FileScanRuntime();
+      if (!file_scan_) {
+        ret = OB_ALLOCATE_MEMORY_FAILED;
+      } else {
+        FileReadOptions options;
+        options.header = text(FILE_HEADER) == "1";
+        options.delimiter = text(FILE_DELIMITER)[0];
+        options.quote = text(FILE_QUOTE)[0];
+        options.escape = text(FILE_ESCAPE)[0];
+        options.null_string = text(FILE_NULL_STRING);
+        if (!file_scan_->reader.open(canonical, text(FILE_FORMAT), options)) {
+          ret = OB_INVALID_ARGUMENT;
+          LOG_USER_ERROR(OB_INVALID_ARGUMENT, file_scan_->reader.error().c_str());
+        } else if (file_scan_->reader.signature() != text(FILE_SIGNATURE)) {
+          ret = OB_INVALID_ARGUMENT;
+          LOG_USER_ERROR(OB_INVALID_ARGUMENT, "file changed after schema inference");
+        } else {
+          std::vector<FileColumn> columns;
+          for (int64_t i = FILE_COLUMN_NAMES; i < MY_SPEC.obj_params_.count(); ++i) {
+            columns.push_back({text(i), FileColumnType::NIL, 0});
+          }
+          file_scan_->reader.set_columns(columns);
+          if (!file_scan_->reader.rewind()) {
+            ret = OB_INVALID_ARGUMENT;
+            LOG_USER_ERROR(OB_INVALID_ARGUMENT, file_scan_->reader.error().c_str());
+          }
+        }
+      }
+    }
+  }
+  return ret;
+}
+
+int ObValuesTableAccessOp::next_file_row()
+{
+  int ret = OB_SUCCESS;
+  bool eof = false;
+  if (!file_scan_) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (!file_scan_->reader.next(file_scan_->row, eof)) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_USER_ERROR(OB_INVALID_ARGUMENT, file_scan_->reader.error().c_str());
+  } else if (eof) {
+    ret = OB_ITER_END;
+  } else if (file_scan_->row.size() != static_cast<size_t>(MY_SPEC.column_exprs_.count())) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    ObEvalCtx::TempAllocGuard guard(eval_ctx_);
+    const ObDataTypeCastParams dtc = ObBasicSessionInfo::create_dtc_params(GET_MY_SESSION(ctx_));
+    for (int64_t i = 0; OB_SUCC(ret) && i < MY_SPEC.column_exprs_.count(); ++i) {
+      FileCell &cell = file_scan_->row[i];
+      ObExpr *expr = MY_SPEC.column_exprs_.at(i);
+      ObObj source, converted;
+      if (cell.is_null) {
+        converted.set_null();
+      } else if (expr->obj_meta_.get_type() == ObVarcharType) {
+        converted.set_varchar(ObString(static_cast<int32_t>(cell.text.size()), cell.text.data()));
+        converted.set_collation_type(CS_TYPE_UTF8MB4_BIN);
+      } else {
+        const ObString token(static_cast<int32_t>(cell.text.size()), cell.text.data());
+        if (token.case_compare("true") == 0) source.set_int(1);
+        else if (token.case_compare("false") == 0) source.set_int(0);
+        else {
+          if (expr->obj_meta_.get_type() == ObDateTimeType && cell.text.size() > 10 && cell.text[10] == 'T') cell.text[10] = ' ';
+          source.set_varchar(ObString(static_cast<int32_t>(cell.text.size()), cell.text.data()));
+          source.set_collation_type(CS_TYPE_UTF8MB4_BIN);
+        }
+        ObCastCtx cast_ctx(&guard.get_allocator(), &dtc, CM_NONE, CS_TYPE_UTF8MB4_BIN);
+        ret = ObObjCaster::to_type(expr->obj_meta_.get_type(), cast_ctx, source, converted);
+      }
+      if (OB_SUCC(ret)) {
+        ret = expr->locate_datum_for_write(eval_ctx_).from_obj(converted);
+        if (OB_SUCC(ret)) expr->set_evaluated_projected(eval_ctx_);
+      }
+    }
   }
   return ret;
 }

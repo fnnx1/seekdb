@@ -1,0 +1,29 @@
+# description: Document-local token maps preserve tokens, frequencies and DML.
+set names utf8mb4;
+select tokenize(null, 'beng');
+select tokenize('', 'ik');
+select tokenize('the and a is an of to', 'beng');
+select tokenize('Alpha alpha ALPHA beta beta gamma', 'beng');
+select tokenize('Alpha alpha ALPHA beta beta gamma', 'beng', '[{"output":"all"}]');
+select tokenize('中文分词 中文分词 数据库 数据库 OceanBase oceanbase', 'ik');
+select tokenize('中文分词 中文分词 数据库 数据库 OceanBase oceanbase', 'ik', '[{"output":"all"}]');
+select tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+select tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+select tokenize('hello hello World 世界 世界 123 123', 'space', '[{"output":"all"}]');
+select tokenize('hello hello World 世界 世界', 'ngram', '[{"output":"all"}]');
+select tokenize('一二三四五 六七八', 'ngram2', '[{"additional_args":[{"min_ngram_size":2},{"max_ngram_size":4}]},{"output":"all"}]');
+select tokenize('hello world abcdefghijklmnopqrstuvwxyz', 'space', '[{"output":"all"},{"additional_args":[{"min_token_size":5},{"max_token_size":10}]}]');
+--disable_warnings
+drop table if exists fts_local_tokens;
+--enable_warnings
+create table fts_local_tokens(content text, fulltext index ft(content) with parser beng);
+insert into fts_local_tokens values ('alpha beta gamma'),('beta delta'),('ALPHA alpha'),('empty token'),(null),('');
+select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+select content from fts_local_tokens where match(content) against('alpha beta gamma delta epsilon zeta theta omega') order by content;
+select content from fts_local_tokens where match(content) against('alpha beta gamma delta epsilon zeta theta omega lambda') order by content;
+select /*+ opt_param('ROWSETS_MAX_ROWS', 1) */ content from fts_local_tokens where match(content) against('alpha beta') order by content;
+update fts_local_tokens set content='gamma gamma' where content='ALPHA alpha';
+select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+delete from fts_local_tokens where content='beta delta';
+select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+drop table fts_local_tokens;

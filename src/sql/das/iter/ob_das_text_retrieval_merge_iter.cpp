@@ -238,7 +238,7 @@ int ObDASTextRetrievalMergeIter::build_query_tokens(const ObDASIRScanCtDef *ir_c
     int64_t doc_length = 0;
     storage::ObFTParseHelper tokenize_helper;
     common::ObSEArray<ObFTWord, 16> tokens;
-    hash::ObHashMap<ObFTWord, int64_t> token_map;
+    storage::ObFTWordMap token_map;
     const int64_t ft_word_bkt_cnt = MAX(search_text_string.length() / 10, 2);
     if (OB_FAIL(tokenize_helper.init(&alloc, parser_name, parser_properties))) {
     } else if (OB_FAIL(token_map.create(ft_word_bkt_cnt, common::ObMemAttr("FTWordMap")))) {
@@ -249,7 +249,7 @@ int ObDASTextRetrievalMergeIter::build_query_tokens(const ObDASIRScanCtDef *ir_c
                            doc_length,
                            token_map))) {
     } else {
-      for (hash::ObHashMap<ObFTWord, int64_t>::const_iterator iter = token_map.begin();
+      for (storage::ObFTWordMap::const_iterator iter = token_map.begin();
           OB_SUCC(ret) && iter != token_map.end();
           ++iter) {
         const ObFTWord &token = iter->first;
@@ -1357,11 +1357,12 @@ int ObDASTRTaatIter::inner_load_next_hashmap()
       } else if (need_relevance) {
         ObDatum &relevance_datum = relevance_expr->locate_expr_datum(*ir_rtdef_->eval_ctx_);
         cur_relevance = relevance_datum.get_double();
-        if (OB_FAIL(map->get_refactored(doc_id, last_relevance))) {
-          if (OB_HASH_NOT_EXIST != ret) {
-          } else if (OB_FAIL(map->set_refactored(doc_id, cur_relevance, 1/*overwrite*/))) {
-          }
-        } else if (OB_FAIL(map->set_refactored(doc_id, cur_relevance + last_relevance, 1/*overwrite*/))) {
+        // The map already owns the doc-id key for repeated hits.
+        // Update the existing score in place instead of hashing twice.
+        double *existing_relevance = map->get(doc_id);
+        if (nullptr != existing_relevance) {
+          *existing_relevance += cur_relevance;
+        } else if (OB_FAIL(map->set_refactored(doc_id, cur_relevance))) {
         }
       } else {
         if (OB_FAIL(map->set_refactored(doc_id, 1, 0/*overwrite*/))) {

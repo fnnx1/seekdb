@@ -34,6 +34,7 @@
 #include "share/ob_autoincrement_service.h"
 #include "observer/ob_req_time_service.h"
 #include "observer/omt/ob_ai_service.h"
+#include "observer/ai_column/ob_ai_column_worker.h"
 #include "observer/ai_service/ob_ai_service_executor.h"
 #include "observer/dbms_scheduler/ob_dbms_sched_service.h"
 #include "storage/lob/ob_lob_manager.h"
@@ -1335,6 +1336,10 @@ int ObServer::start()
       LOG_ERROR("fail to start standby gRPC service", KR(ret));
     }
 
+    if (OB_SUCC(ret) && OB_FAIL(share::ObAiColumnWorker::get_instance().ensure_started())) {
+      LOG_ERROR("fail to start durable AI column worker", KR(ret));
+    }
+
   int64_t start_service_time = ObTimeUtility::current_time();
   if (OB_FAIL(ret)) {
     LOG_ERROR("failure occurs, stop observer startup", KR(ret));
@@ -1553,6 +1558,7 @@ int ObServer::stop()
   int fail_ret = OB_SUCCESS;
   FLOG_INFO("[OBSERVER_NOTICE] stop observer begin");
   LOG_DBA_INFO_V2(OB_SERVER_STOP_BEGIN, "observer stop begin.");
+  share::ObAiColumnWorker::get_instance().destroy();
 
   if (in_process_) {
     // DDL retries must observe cancellation while schema and SQL services are still available.

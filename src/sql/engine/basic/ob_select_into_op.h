@@ -126,7 +126,11 @@ public:
       external_properties_(),
       format_type_(ObExternalFileFormat::FormatType::CSV_FORMAT),
       block_id_(0),
-      need_commit_(true)
+      need_commit_(true),
+      header_written_(false),
+      copy_created_(false),
+      copy_finished_(false),
+      copy_target_()
   {
   }
 
@@ -202,6 +206,12 @@ private:
   int get_row_str(const int64_t buf_len, bool is_first_row, char *buf, int64_t &pos);
   int into_dumpfile(ObExternalFileWriter *data_writer);
   int into_outfile(ObExternalFileWriter *data_writer);
+  int write_header_if_needed(ObCsvFileWriter *writer);
+  bool is_file_copy() const { return spec_.type_ == PHY_SELECT_INTO
+      && static_cast<const ObSelectIntoSpec &>(spec_).into_type_ == T_INTO_OUTFILE
+      && !static_cast<const ObSelectIntoSpec &>(spec_).user_vars_.empty(); }
+  int prepare_copy_path();
+  int finish_copy(bool publish);
   int into_outfile_batch_csv(const ObBatchRows &brs, ObExternalFileWriter *data_writer);
   int extract_fisrt_wchar_from_varhcar(const ObObj &obj, int32_t &wchar);
   int print_wchar_to_buf(char *buf,
@@ -292,6 +302,10 @@ private:
   ObExternalFileFormat::FormatType format_type_;
   uint32_t block_id_;
   bool need_commit_;
+  bool header_written_;
+  bool copy_created_;
+  bool copy_finished_;
+  common::ObString copy_target_;
   static const int64_t SHARED_BUFFER_SIZE = 2LL * 1024 * 1024;
 
 };

@@ -89,6 +89,18 @@ _EXISTING_SEMANTIC_API_TARGETS = [
 ]
 
 _SHARE_SEMANTIC_HEADER_TARGETS = {
+    "ai_column_interface": struct(
+        hdrs = [
+            "ai_column/ob_ai_column_struct.h",
+            "ai_column/ob_ai_column_util.h",
+        ],
+        deps = [
+            ":core_types",
+            "//src/oblib:oblib_collections_advanced",
+            "//src/oblib:oblib_db_values_runtime",
+            "//src/oblib:oblib_foundation_support",
+        ],
+    ),
     "seekdb_runtime_foundation": struct(
         hdrs = [
             "ob_compatibility_control.h",

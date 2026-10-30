@@ -97,6 +97,21 @@ _SQL_RUNTIME_COMMON_ONLY_GROUPS = [
 ]
 
 _SQL_RUNTIME_EXTRA_DEP_CONSUMERS = {
+    '//src/share:ai_column_interface': [
+        'ob_sql_common_0',
+        'ob_sql_common_mixed_0',
+        'ob_sql_engine_cmd_0',
+        'ob_sql_engine_cmd_1',
+        'ob_sql_engine_dml_0',
+        'ob_sql_executor_0',
+        'ob_sql_resolver_0',
+        'ob_sql_resolver_cmd_0',
+        'ob_sql_resolver_dcl_0',
+        'ob_sql_resolver_ddl_0',
+        'ob_sql_resolver_ddl_1',
+        'ob_sql_resolver_ddl_2',
+        'ob_sql_resolver_dml_0',
+    ],
     # Third-party owners are assigned only to Unity groups whose recursive
     # SQL-owned include closure reaches those headers.  Keeping these out of
     # sql_runtime_interface prevents every SQL action and every interface

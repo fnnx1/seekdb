@@ -19,6 +19,7 @@
 #include "ob_table_modify_op.h"
 #include "share/ob_autoincrement_service.h"
 #include "query/session/ob_inner_sql_connection_access.h"
+#include "share/ai_column/ob_ai_column_util.h"
 #include "sql/engine/ob_physical_plan.h"
 #include "sql/engine/dml/ob_dml_service.h"
 
@@ -32,6 +33,12 @@ using namespace share::schema;
 using namespace observer;
 namespace sql
 {
+
+void ObTableModifyOp::destroy_ai_col_ctx()
+{
+  share::ObAiColumnUtil::destroy_op_ctx(*this);
+}
+
 int ForeignKeyHandle::do_handle(ObTableModifyOp &op,
                                 const ObDMLBaseCtDef &dml_ctdef,
                                 ObDMLBaseRtDef &dml_rtdef)
@@ -644,6 +651,8 @@ int ObTableModifyOp::inner_open()
   } else {
     init_das_dml_ctx();
   }
+  if (OB_FAIL(ret)) {
+  }
   return ret;
 }
 
@@ -1061,6 +1070,11 @@ int ObTableModifyOp::submit_all_dml_task()
       dml_modify_rows_.clear();
       dml_rtctx_.reuse();
     }
+  }
+  // AI column task-table writes: nested SQL on the user session is only safe
+  // after the DAS tasks ran, so the hooks collect and flush here
+  if (OB_SUCC(ret) && OB_FAIL(share::ObAiColumnUtil::flush_pending_sqls(*this))) {
+    LOG_WARN("fail to flush ai column task sqls", K(ret));
   }
   return ret;
 }
