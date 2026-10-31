@@ -121,10 +121,8 @@ int ObFtsIndexBuildTask::init(
                                          create_index_arg_))) {
   } else if (OB_FAIL(ObFtsIndexBuilderUtil::decide_parallelism(
                  create_index_arg.index_type_,
-                 nullptr != index_schema &&
-                     nullptr != index_schema->get_parser_name() &&
-                     0 == strncasecmp(index_schema->get_parser_name(), "beng", 4) &&
-                     '\0' == index_schema->get_parser_name()[4],
+                 4 == create_index_arg.index_option_.parser_name_.length() &&
+                     0 == strncasecmp(create_index_arg.index_option_.parser_name_.ptr(), "beng", 4),
                  parallelism,
                  parallelism_))) {
   } else {
