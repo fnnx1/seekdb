@@ -391,6 +391,9 @@ bool FileScanReader::expand_glob()
     std::string name;
     const auto encoded = entry.path().filename().u8string();
     name.assign(reinterpret_cast<const char *>(encoded.data()), encoded.size());
+    // AppleDouble resource-fork artifacts can appear beside fixture files on
+    // archive extraction; they are not data files and must not pollute glob().
+    if (name.rfind("._", 0) == 0 || name == ".DS_Store") continue;
     if (!glob_match(pattern.c_str(), name.c_str())) continue;
     std::string full;
     const auto path = entry.path().u8string();
