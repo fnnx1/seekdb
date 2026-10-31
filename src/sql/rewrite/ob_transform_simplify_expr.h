@@ -219,6 +219,12 @@ private:
                                               ObIArray<ObRawExpr*> &extracted_preds);
   int add_constraint_for_convert_case_when_by_then(ObIArray<ObRawExpr *> &false_null_exprs,
                                                    ObIArray<ObRawExpr *> &true_exprs);
+
+  int reduce_identity_operands(ObDMLStmt *stmt, bool &trans_happened);
+  int reduce_join_condition_operands(TableItem *table, bool &trans_happened);
+  int inner_reduce_identity_operands(common::ObIArray<ObRawExpr *> &conditions, bool &trans_happened);
+  int reduce_identity_operands(ObRawExpr *&expr, bool &trans_happened);
+  int is_identity_operand(ObRawExpr *child, const bool is_or, bool &is_identity);
 };
 }
 }

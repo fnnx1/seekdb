@@ -27,6 +27,7 @@
 #include "query/session/ob_inner_sql_connection_access.h"
 #include "share/ob_ddl_common.h"
 #include "share/inner_table/ob_inner_table_schema_constants.h"
+#include "share/ob_dml_sql_splicer.h"
 #include "sql/printer/ob_schema_printer.h"
 #include "share/autoincrement/ob_i_tablet_autoincrement_admin.h"
 #include "storage/blocksstable/index_block/ob_index_block_util.h"
@@ -1279,6 +1280,131 @@ int ObDDLService::create_tablets_in_trans_(ObIArray<ObTableSchema> &table_schema
   return ret;
 }
 
+// AI column metadata is carried in the comment of the hidden state column as
+// "<max_retries>\x01<sync_mode>\x01<model>\x01<expression>\x01<instruction>".
+// The resolver writes it there because ObColumnSchemaV2 has no spare field and
+// extended_type_info is already used by vector columns for their dimension.
+static const char AI_COLUMN_STATE_COL_PREFIX[] = "__ai_state_";
+static const char AI_COLUMN_REQUEST_COL_PREFIX[] = "__ai_request_";
+static const char AI_COLUMN_RESULT_COL_PREFIX[] = "__ai_result_";
+static const char AI_COLUMN_META_SEPARATOR = '\x01';
+
+static int64_t ai_column_parse_int(const ObString &text)
+{
+  int64_t value = 0;
+  bool negative = false;
+  for (int32_t i = 0; i < text.length(); ++i) {
+    const char c = text[i];
+    if ('-' == c) {
+      negative = true;
+    } else if (c >= '0' && c <= '9') {
+      value = value * 10 + (c - '0');
+    } else {
+      break;
+    }
+  }
+  return negative ? -value : value;
+}
+
+int ObDDLService::create_ai_column_metadata(const ObTableSchema &table_schema,
+                                            common::ObISQLClient &sql_client)
+{
+  int ret = OB_SUCCESS;
+  const uint64_t table_id = table_schema.get_table_id();
+  const int64_t state_prefix_len = static_cast<int64_t>(STRLEN(AI_COLUMN_STATE_COL_PREFIX));
+  for (int64_t i = 0; OB_SUCC(ret) && i < table_schema.get_column_count(); ++i) {
+    const ObColumnSchemaV2 *state_column = table_schema.get_column_schema_by_idx(i);
+    if (OB_ISNULL(state_column)) {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("unexpected null column schema", K(ret), K(i));
+    } else if (!state_column->is_hidden()) {
+      continue;
+    } else {
+      const ObString &state_name = state_column->get_column_name_str();
+      const ObString &comment = state_column->get_comment_str();
+      if (state_name.length() <= state_prefix_len
+          || 0 != MEMCMP(state_name.ptr(), AI_COLUMN_STATE_COL_PREFIX, state_prefix_len)) {
+        continue;
+      }
+      ObString ai_column_name(state_name.length() - state_prefix_len,
+                              state_name.ptr() + state_prefix_len);
+      const ObColumnSchemaV2 *ai_column = table_schema.get_column_schema(ai_column_name);
+      // Split the metadata comment into max_retries, sync_mode, model, expression and
+      // instruction. Everything after the fourth separator belongs to the instruction.
+      ObString fields[5];
+      int64_t field_idx = 0;
+      int64_t segment_start = 0;
+      for (int64_t c = 0; c < comment.length() && field_idx < 4; ++c) {
+        if (AI_COLUMN_META_SEPARATOR == comment[c]) {
+          fields[field_idx++].assign_ptr(comment.ptr() + segment_start,
+                                         static_cast<int32_t>(c - segment_start));
+          segment_start = c + 1;
+        }
+      }
+      if (4 == field_idx) {
+        fields[field_idx++].assign_ptr(comment.ptr() + segment_start,
+                                       static_cast<int32_t>(comment.length() - segment_start));
+      }
+      char request_name[256];
+      char result_name[256];
+      int request_len = snprintf(request_name, sizeof(request_name), "%s%.*s",
+                                 AI_COLUMN_REQUEST_COL_PREFIX,
+                                 ai_column_name.length(), ai_column_name.ptr());
+      int result_len = snprintf(result_name, sizeof(result_name), "%s%.*s",
+                                AI_COLUMN_RESULT_COL_PREFIX,
+                                ai_column_name.length(), ai_column_name.ptr());
+      const ObColumnSchemaV2 *request_column = NULL;
+      const ObColumnSchemaV2 *result_column = NULL;
+      if (OB_ISNULL(ai_column)) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("AI column without a visible column schema", K(ret), K(ai_column_name));
+      } else if (5 != field_idx) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("AI column metadata is malformed", K(ret), K(ai_column_name));
+      } else if (request_len <= 0 || request_len >= static_cast<int64_t>(sizeof(request_name))
+                 || result_len <= 0 || result_len >= static_cast<int64_t>(sizeof(result_name))) {
+        ret = OB_SIZE_OVERFLOW;
+      } else if (OB_ISNULL(request_column = table_schema.get_column_schema(request_name))
+                 || OB_ISNULL(result_column = table_schema.get_column_schema(result_name))) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("AI column hidden companions are missing", K(ret), K(ai_column_name));
+      } else {
+        ObSqlString normalized_expr;
+        ObDMLSqlSplicer sql;
+        ObSqlString buffer;
+        int64_t affected_rows = 0;
+        if (OB_FAIL(normalized_expr.append(fields[3]))) {
+        } else if (fields[4].length() > 0
+                   && OB_FAIL(normalized_expr.append_fmt(" %.*s",
+                                                         fields[4].length(), fields[4].ptr()))) {
+        } else if (OB_FAIL(sql.add_pk_column("table_id", static_cast<int64_t>(table_id)))) {
+        } else if (OB_FAIL(sql.add_pk_column("column_id",
+                                    static_cast<int64_t>(ai_column->get_column_id())))) {
+        } else if (OB_FAIL(sql.add_column("column_name", ObHexEscapeSqlStr(ai_column_name)))) {
+        } else if (OB_FAIL(sql.add_column("ai_model_name", ObHexEscapeSqlStr(fields[2])))) {
+        } else if (OB_FAIL(sql.add_column("normalized_expr",
+                                          ObHexEscapeSqlStr(normalized_expr.string())))) {
+        } else if (OB_FAIL(sql.add_column("state_column_id",
+                            static_cast<int64_t>(state_column->get_column_id())))) {
+        } else if (OB_FAIL(sql.add_column("request_column_id",
+                            static_cast<int64_t>(request_column->get_column_id())))) {
+        } else if (OB_FAIL(sql.add_column("result_spec_column_id",
+                            static_cast<int64_t>(result_column->get_column_id())))) {
+        } else if (OB_FAIL(sql.add_column("max_retries", ai_column_parse_int(fields[0])))) {
+        } else if (OB_FAIL(sql.add_column("sync_mode", ai_column_parse_int(fields[1])))) {
+        } else if (OB_FAIL(sql.splice_insert_sql(OB_ALL_AI_COLUMN_TNAME, buffer))) {
+        } else if (OB_FAIL(sql_client.write(buffer.ptr(), affected_rows))) {
+          LOG_WARN("write __all_ai_column failed", K(ret), K(table_id), K(ai_column_name));
+        } else if (1 != affected_rows) {
+          ret = OB_ERR_UNEXPECTED;
+          LOG_WARN("unexpected affected rows", K(ret), K(affected_rows));
+        }
+      }
+    }
+  }
+  return ret;
+}
+
 int ObDDLService::create_tables_in_trans(const bool if_not_exist,
                                          const ObString &ddl_stmt_str,
                                          const ObErrorInfo &error_info,
@@ -1419,6 +1545,11 @@ int ObDDLService::create_tables_in_trans(const bool if_not_exist,
 
       if (OB_SUCC(ret) && OB_FAIL(create_tablets_in_trans_(
           table_schemas, ddl_operator, trans, schema_guard, data_format_version))) {
+      }
+      // The AI column metadata row is written in the same transaction as the table so
+      // that a failed create never leaves a dangling __all_ai_column entry.
+      if (OB_SUCC(ret) && OB_FAIL(create_ai_column_metadata(*first_table, trans))) {
+        LOG_WARN("create AI column metadata failed", K(ret), KPC(first_table));
       }
       RS_TRACE(operator_create_table_end);
     }

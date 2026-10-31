@@ -3044,6 +3044,138 @@ int ObSelectResolver::resolve_into_outfile_with_format(const ParseNode *node, Ob
   return ret;
 }
 
+int ObSelectResolver::resolve_copy_into_clause(const ParseNode *node, ObSelectIntoItem &into_item)
+{
+  int ret = OB_SUCCESS;
+  bool has_format = false;
+  bool has_header = false;
+  ObExternalFileFormat external_format;
+  if (OB_ISNULL(node) || 3 != node->num_child_ || OB_ISNULL(node->children_)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("invalid COPY clause", K(ret));
+  } else if (OB_FAIL(resolve_into_const_node(node->children_[0], into_item.outfile_name_))) {
+    LOG_WARN("failed to resolve the COPY destination", K(ret));
+  } else {
+    const ParseNode *option_list = node->children_[1];
+    for (int64_t i = 0; OB_SUCC(ret) && OB_NOT_NULL(option_list) && i < option_list->num_child_; ++i) {
+      const ParseNode *option = NULL;
+      const ParseNode *name_node = NULL;
+      const ParseNode *value_node = NULL;
+      if (OB_ISNULL(option_list->children_) || OB_ISNULL(option = option_list->children_[i])) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (T_EXTERNAL_FILE_FORMAT_TYPE == option->type_) {
+        // FORMAT csv
+        if (1 != option->num_child_ || OB_ISNULL(option->children_) ||
+            OB_ISNULL(name_node = option->children_[0])) {
+          ret = OB_ERR_PARSE_SQL;
+          LOG_WARN("invalid COPY format option", K(ret));
+        } else {
+          const ObString format(static_cast<int32_t>(name_node->str_len_), name_node->str_value_);
+          if (0 != format.case_compare("csv")) {
+            ret = OB_ERR_PARSE_SQL;
+            LOG_WARN("only the csv format is supported by COPY", K(format), K(ret));
+          } else {
+            has_format = true;
+          }
+        }
+      } else if (T_OP_EQ != option->type_ || 2 != option->num_child_ ||
+                 OB_ISNULL(option->children_) ||
+                 OB_ISNULL(name_node = option->children_[0])) {
+        ret = OB_ERR_PARSE_SQL;
+        LOG_WARN("invalid COPY option", K(i), K(ret));
+      } else {
+        value_node = option->children_[1];
+        const ObString opt_name(static_cast<int32_t>(name_node->str_len_), name_node->str_value_);
+        if (0 == opt_name.case_compare("format")) {
+          const ObString format(NULL == value_node ? 0 : static_cast<int32_t>(value_node->str_len_),
+                                NULL == value_node ? NULL : value_node->str_value_);
+          if (T_VARCHAR != (NULL == value_node ? T_NULL : value_node->type_) ||
+              0 != format.case_compare("csv")) {
+            ret = OB_ERR_PARSE_SQL;
+            LOG_WARN("only the csv format is supported by COPY", K(format), K(ret));
+          } else {
+            has_format = true;
+          }
+        } else if (0 == opt_name.case_compare("header")) {
+          if (NULL == value_node) {
+            has_header = true;
+          } else if (T_BOOL == value_node->type_) {
+            has_header = (0 != value_node->value_);
+          } else {
+            ret = OB_ERR_PARSE_SQL;
+            LOG_WARN("the COPY header option must be boolean", K(ret));
+          }
+        } else if (0 == opt_name.case_compare("nullstr")) {
+          // Nulls carry no special text in this writer; the option is accepted
+          // so that the COPY dialect of DuckDB parses, and it is a no-op.
+          LOG_TRACE("COPY nullstr option is ignored", K(ret));
+        } else {
+          ret = OB_ERR_PARSE_SQL;
+          LOG_WARN("unknown COPY option", K(opt_name), K(ret));
+        }
+      }
+    }
+  }
+  if (OB_SUCC(ret) && !has_format) {
+    ret = OB_ERR_PARSE_SQL;
+    LOG_WARN("COPY needs an explicit csv format", K(ret));
+  }
+  if (OB_SUCC(ret)) {
+    // Start from the same defaults as `INTO OUTFILE ... FORMAT CSV`, then apply
+    // the COPY dialect: comma separated, no field enclosing, '\n' line ends.
+    const ObCollationType file_cs_type = ObCharset::get_system_collation();
+    if (OB_FAIL(external_format.csv_format_.init_format(ObDataInFileStruct(), 0, file_cs_type))) {
+      LOG_WARN("failed to init the COPY format", K(ret));
+    } else {
+      external_format.format_type_ = ObExternalFileFormat::CSV_FORMAT;
+      external_format.csv_format_.field_term_str_.assign_ptr(",", 1);
+      external_format.csv_format_.line_term_str_.assign_ptr("\n", 1);
+      external_format.csv_format_.field_enclosed_char_ = INT64_MAX;
+      external_format.csv_format_.field_escaped_char_ = '\\';
+      external_format.csv_format_.parse_header_ = has_header;
+      if (OB_FAIL(external_format.to_string_with_alloc(into_item.external_properties_,
+                                                       *allocator_, true))) {
+        LOG_WARN("failed to serialize the COPY format", K(ret));
+      } else if (has_header && OB_FAIL(build_copy_header_line(into_item))) {
+        LOG_WARN("failed to build the COPY header", K(ret));
+      }
+    }
+  }
+  return ret;
+}
+
+int ObSelectResolver::build_copy_header_line(ObSelectIntoItem &into_item)
+{
+  int ret = OB_SUCCESS;
+  ObSelectStmt *select_stmt = get_select_stmt();
+  ObSqlString header;
+  ObString header_str;
+  if (OB_ISNULL(select_stmt) || OB_ISNULL(allocator_)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("invalid select statement for the COPY header", K(ret));
+  } else {
+    for (int64_t i = 0; OB_SUCC(ret) && i < select_stmt->get_select_item_size(); ++i) {
+      const SelectItem &item = select_stmt->get_select_item(i);
+      if (i > 0 && OB_FAIL(header.append(","))) {
+        LOG_WARN("failed to build the COPY header", K(ret));
+      } else if (OB_FAIL(header.append(item.alias_name_))) {
+        LOG_WARN("failed to build the COPY header", K(ret));
+      }
+    }
+    if (OB_SUCC(ret) && OB_FAIL(header.append("\n"))) {
+      LOG_WARN("failed to build the COPY header", K(ret));
+    }
+    if (OB_SUCC(ret) && OB_FAIL(ob_write_string(*allocator_, header.string(), header_str))) {
+      LOG_WARN("failed to copy the COPY header", K(ret));
+    }
+    if (OB_SUCC(ret)) {
+      into_item.header_line_.set_varchar(header_str);
+      into_item.header_line_.set_collation_type(ObCharset::get_system_collation());
+    }
+  }
+  return ret;
+}
+
 int ObSelectResolver::resolve_into_outfile_without_format(const ParseNode *node,
                                                           ObSelectIntoItem &into_item)
 {
@@ -3107,6 +3239,11 @@ int ObSelectResolver::resolve_into_clause(const ParseNode *node)
       if (T_INTO_OUTFILE == node->type_) { // into outfile
         if (is_in_set_query()) {
           ret = OB_INAPPROPRIATE_INTO;
+        } else if (node->num_child_ == 3 && 1 == node->value_) {
+          // COPY ( <query> ) TO '<path>' ( ... )
+          if (OB_FAIL(resolve_copy_into_clause(node, *into_item))) {
+            LOG_WARN("failed to resolve the COPY clause", K(ret));
+          }
         } else if (node->num_child_ == 3 && NULL != node->children_[1]
             && T_EXTERNAL_FILE_FORMAT == node->children_[1]->type_) { // Handle with `FORMAT`
           if (OB_FAIL(resolve_into_outfile_with_format(node, *into_item))) {

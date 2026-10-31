@@ -5453,6 +5453,7 @@ int ObStaticEngineCG::generate_spec(ObLogSelectInto &op, ObSelectIntoSpec &spec,
   if (OB_UNLIKELY(1 != op.get_num_of_child())) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(deep_copy_obj(alloc, op.get_outfile_name(), spec.outfile_name_))) {
+  } else if (OB_FAIL(deep_copy_obj(alloc, op.get_header_line(), spec.header_line_))) {
   } else if (OB_FAIL(deep_copy_obj(alloc, op.get_field_str(), spec.field_str_))) {
   } else if (OB_FAIL(deep_copy_obj(alloc, op.get_line_str(), spec.line_str_))) {
   } else if (OB_FAIL(deep_copy_obj(alloc, op.get_closed_cht(), spec.closed_cht_))) {

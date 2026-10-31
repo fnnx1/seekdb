@@ -40,6 +40,21 @@ int ObFTWord::hash(uint64_t &hash_val) const
 }
 bool ObFTWord::operator==(const ObFTWord &other) const
 {
+  if (meta_.get_collation_type() == other.meta_.get_collation_type()) {
+    const uint32_t l1 = word_.len_;
+    const uint32_t l2 = other.word_.len_;
+    if (l1 == l2 && (0 == l1 || 0 == MEMCMP(word_.ptr_, other.word_.ptr_, l1))) {
+      return true;
+    }
+    const ObCollationType cs = meta_.get_collation_type();
+    if ((CS_TYPE_UTF8MB4_GENERAL_CI == cs || CS_TYPE_UTF8MB4_BIN == cs || CS_TYPE_BINARY == cs)
+        && (0 == l1 || ' ' != word_.ptr_[l1 - 1])
+        && (0 == l2 || ' ' != other.word_.ptr_[l2 - 1])) {
+      if (l1 != l2 || CS_TYPE_UTF8MB4_BIN == cs || CS_TYPE_BINARY == cs) {
+        return false;
+      }
+    }
+  }
   bool is_equal = false;
   int ret = OB_SUCCESS;
   int cmp_ret = 0;

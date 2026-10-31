@@ -1,0 +1,92 @@
+name: SeekDB FTS Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: 'report label (before / after)'
+        required: false
+        default: 'probe'
+
+jobs:
+  bench:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    steps:
+    - name: Free Disk Space
+      uses: insightsengineering/disk-space-reclaimer@v1
+      with:
+        tools-cache: false
+
+    - uses: actions/checkout@v3
+
+    - name: Install ubuntu environment
+      shell: bash
+      run: |
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt-get update
+        sudo apt-get install -y git wget rpm rpm2cpio cpio make build-essential binutils m4 libtool-bin libncurses5 python3
+
+    - name: Cache deps
+      id: cache-deps
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-deps
+      with:
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-el9.x86_64-${{ hashFiles('deps/init/oceanbase.el9.x86_64.deps') }}
+        path: deps/3rd
+
+    - name: Build
+      uses: ./.github/workflows/buildbase
+      with:
+        save_cache: 'false'
+        os: 'ubuntu22'
+
+    - name: Start seekdb for benchmark
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 .github/script/seekdb/bench_runner.py \
+          --seekdb build_release/src/observer/seekdb \
+          --obclient deps/3rd/u01/obclient/bin/obclient \
+          --base-dir "$GITHUB_WORKSPACE/bench_out/instance"
+
+    - name: Run fts benchmark
+      shell: bash
+      run: |
+        set -o pipefail
+        CLIENT="$GITHUB_WORKSPACE/deps/3rd/u01/obclient/bin/obclient"
+        LABEL="${{ github.event.inputs.label }}" \
+        MYSQL="$CLIENT -h127.0.0.1 -P2881 -uroot -N -s --default-character-set=utf8mb4" \
+        MYSQL_VERBOSE="$CLIENT -h127.0.0.1 -P2881 -uroot --default-character-set=utf8mb4" \
+        OUTPUT="$GITHUB_WORKSPACE/bench_out/report.txt" \
+        bash tools/benchmark/fts_large_bench.sh 2>&1 | tee bench.log
+
+    - name: Score against the checked-in baseline
+      if: always()
+      shell: bash
+      run: |
+        if [[ -f bench_out/report.txt ]]; then
+          python3 tools/benchmark/fts_large_bench_score.py bench_out/report.txt \
+            --allow-config-mismatch 2>&1 | tee bench_out/score.txt
+        else
+          echo "no report produced" | tee bench_out/score.txt
+        fi
+
+    - name: Stop seekdb
+      if: always()
+      shell: bash
+      run: |
+        python3 .github/script/seekdb/sdb.py stop \
+          --base-dir "$GITHUB_WORKSPACE/bench_out/instance" || true
+
+    - name: Upload bench output
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: seekdb-fts-bench
+        path: |
+          bench.log
+          bench_out/report.txt
+          bench_out/score.txt
+        if-no-files-found: warn

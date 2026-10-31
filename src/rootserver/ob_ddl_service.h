@@ -968,6 +968,11 @@ int check_will_be_having_domain_index_operation(
                               share::schema::ObSchemaGetterGuard &schema_guard,
                               const uint64_t data_format_version,
                               const share::ObForkTableInfo &fork_table_info = share::ObForkTableInfo());
+  // Publish one __all_ai_column row for every column of the table that was declared
+  // with AI COLUMN (...). The resolver carries the metadata in the comment of the
+  // hidden state column, so it is recovered here instead of being sent separately.
+  int create_ai_column_metadata(const share::schema::ObTableSchema &table_schema,
+                                common::ObISQLClient &sql_client);
   int set_new_database_options(const obcall::ObAlterDatabaseArg &arg,
                                share::schema::ObDatabaseSchema &new_database_schema);
   int set_new_table_options(

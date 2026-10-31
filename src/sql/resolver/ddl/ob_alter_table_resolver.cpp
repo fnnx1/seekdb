@@ -775,6 +775,15 @@ int ObAlterTableResolver::resolve_column_options(const ParseNode &node,
         SQL_RESV_LOG(WARN, "invalid parse tree!", K(ret));
       } else {
         switch(column_node->type_) {
+        //retry an AI column
+        case T_AI_COLUMN_RETRY: {
+            // ALTER TABLE ... RETRY AI COLUMN <col> [WHERE ...] is reserved by the
+            // grammar only; the retry machinery is not implemented yet.
+            ret = OB_NOT_SUPPORTED;
+            LOG_USER_ERROR(OB_NOT_SUPPORTED, "retry ai column");
+            SQL_RESV_LOG(WARN, "retry ai column is not implemented yet", K(ret));
+            break;
+          }
         //add column
         case T_COLUMN_ADD: {
             has_add_column = true;

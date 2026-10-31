@@ -37,8 +37,15 @@ const char *VALID_PROVIDERS[] = {
   "SILICONFLOW",
   "COHERE",
   "HUNYUAN-OPENAI",
-  "OPENAI"
+  "OPENAI",
+  "OLLAMA"
 };
+
+// Accepted range for the per-endpoint in-flight request cap.  The lower bound is
+// 1 because a zero cap would make every request against the endpoint fail; the
+// upper bound keeps one endpoint from draining the whole observer thread pool.
+static const int64_t MIN_ENDPOINT_MAX_CONCURRENCY = 1;
+static const int64_t MAX_ENDPOINT_MAX_CONCURRENCY = 1024;
 
 #define EXTRACT_JSON_ELEM_STR(json_key, member) \
   EXTRACT_JSON_ELEM_STR_WITH_PROCESS(json_key, member, "void")
@@ -61,6 +68,29 @@ const char *VALID_PROVIDERS[] = {
     LOG_USER_ERROR(OB_AI_FUNC_PARAM_INVALID, elem.first.length(), elem.first.ptr()); \
     LOG_WARN("unknown json key param", K(ret), K(elem.first)); \
   }
+
+// Integer valued option (e.g. max_concurrency).  A quoted number is rejected on
+// purpose: the option is a server side cap, not a client side hint, so a value
+// whose type has to be guessed is reported as an invalid value instead of being
+// silently coerced.
+#define EXTRACT_JSON_ELEM_INT_WITH_PROCESS(json_key, member, post_process) \
+      if (elem.first.case_compare(json_key) == 0) { \
+        if (elem.second->json_type() == ObJsonNodeType::J_INT) { \
+          member = elem.second->get_int(); \
+          post_process; \
+        } else if (elem.second->json_type() == ObJsonNodeType::J_UINT) { \
+          member = static_cast<int64_t>(elem.second->get_uint()); \
+          post_process; \
+        } else { \
+          ret = OB_AI_FUNC_PARAM_VALUE_INVALID; \
+          LOG_USER_ERROR(OB_AI_FUNC_PARAM_VALUE_INVALID, elem.first.length(), elem.first.ptr()); \
+          LOG_WARN("invalid json type for int param", K(ret), K(elem.first), K(elem.second->json_type())); \
+        } \
+      } else
+
+#define EXTRACT_JSON_ELEM_INT(json_key, member) \
+  EXTRACT_JSON_ELEM_INT_WITH_PROCESS(json_key, member, "void")
+
 
 int ObAiModelEndpointInfo::parse_from_json_base(common::ObArenaAllocator &allocator, const ObString &name, const ObIJsonBase &params_jbase)
 {
@@ -91,6 +121,9 @@ int ObAiModelEndpointInfo::deep_copy(
   } else if (OB_FAIL(ob_write_string(allocator, other.request_transform_fn_, request_transform_fn_))) {
   } else if (OB_FAIL(ob_write_string(allocator, other.response_transform_fn_, response_transform_fn_))) {
   }
+  if (OB_SUCC(ret)) {
+    max_concurrency_ = other.max_concurrency_;
+  }
   return ret;
 }
 
@@ -112,7 +145,10 @@ int ObAiModelEndpointInfo::check_valid() const
   } else if (url_.empty()) {
     ret = OB_AI_FUNC_PARAM_EMPTY;
     LOG_USER_ERROR(OB_AI_FUNC_PARAM_EMPTY, strlen("url"), "url");
-  } else if (access_key_.empty()) {
+  } else if (access_key_.empty() && provider_.case_compare(ObString::make_string("OLLAMA")) != 0) {
+    // Ollama serves the model from a locally reachable endpoint and normally has no
+    // API key, so an empty access_key is only rejected for providers that
+    // authenticate against a remote service.
     ret = OB_AI_FUNC_PARAM_EMPTY;
     LOG_USER_ERROR(OB_AI_FUNC_PARAM_EMPTY, strlen("access_key"), "access_key");
     LOG_WARN("access_key is empty", K(ret), K(*this));
@@ -131,6 +167,9 @@ int ObAiModelEndpointInfo::check_valid() const
   } else if (!response_transform_fn_.empty()) {
     ret = OB_AI_FUNC_PARAM_VALUE_INVALID;
     LOG_USER_ERROR(OB_AI_FUNC_PARAM_VALUE_INVALID, strlen("response_transform_fn"), "response_transform_fn");
+  } else if (max_concurrency_ < 0 || max_concurrency_ > MAX_ENDPOINT_MAX_CONCURRENCY) {
+    ret = OB_AI_FUNC_PARAM_VALUE_INVALID;
+    LOG_USER_ERROR(OB_AI_FUNC_PARAM_VALUE_INVALID, strlen("max_concurrency"), "max_concurrency");
   }
   return ret;
 }
@@ -152,6 +191,7 @@ int ObAiModelEndpointInfo::merge_delta_endpoint(common::ObArenaAllocator &alloca
   int ret = OB_SUCCESS;
   JsonObjectIterator iter = delta_jbase.object_iterator();
   bool has_api_key = false;
+  bool has_max_concurrency = false;
   while (!iter.end() && OB_SUCC(ret)) {
     ObJsonObjPair elem;
     if (OB_FAIL(iter.get_elem(elem))) {
@@ -165,13 +205,19 @@ int ObAiModelEndpointInfo::merge_delta_endpoint(common::ObArenaAllocator &alloca
       EXTRACT_JSON_ELEM_STR("parameters", parameters_)
       EXTRACT_JSON_ELEM_STR("request_transform_fn", request_transform_fn_)
       EXTRACT_JSON_ELEM_STR("response_transform_fn", response_transform_fn_)
+      EXTRACT_JSON_ELEM_INT_WITH_PROCESS("max_concurrency", max_concurrency_, has_max_concurrency = true)
       EXTRACT_JSON_ELEM_END()
     }
     iter.next();
   }
 
   if (OB_SUCC(ret)) {
-    if (has_api_key && !access_key_.empty() && OB_FAIL(encrypt_access_key_(allocator, access_key_, access_key_))) {
+    if (has_max_concurrency && (max_concurrency_ < MIN_ENDPOINT_MAX_CONCURRENCY
+                                || max_concurrency_ > MAX_ENDPOINT_MAX_CONCURRENCY)) {
+      ret = OB_AI_FUNC_PARAM_VALUE_INVALID;
+      LOG_USER_ERROR(OB_AI_FUNC_PARAM_VALUE_INVALID, strlen("max_concurrency"), "max_concurrency");
+      LOG_WARN("max_concurrency out of range", K(ret), K_(max_concurrency));
+    } else if (has_api_key && !access_key_.empty() && OB_FAIL(encrypt_access_key_(allocator, access_key_, access_key_))) {
       LOG_WARN("failed to encrypt access key", K(ret));
     } else if (OB_FAIL(check_valid())) {
     }

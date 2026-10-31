@@ -1,0 +1,8 @@
+name: Build Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  compile:
+    uses: ./.github/workflows/compile.yml

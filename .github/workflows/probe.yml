@@ -1,0 +1,133 @@
+name: SeekDB Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefixes:
+        description: 'comma separated mysqltest case prefixes (e.g. ai_function.)'
+        required: false
+        default: 'ai_function.'
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    steps:
+    - name: Free Disk Space
+      uses: insightsengineering/disk-space-reclaimer@v1
+      with:
+        tools-cache: false
+
+    - uses: actions/checkout@v3
+
+    - name: Install ubuntu environment
+      shell: bash
+      run: |
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt-get update
+        sudo apt-get install -y git wget rpm rpm2cpio cpio make build-essential binutils m4 libtool-bin libncurses5 python3
+
+    - name: Cache deps
+      id: cache-deps
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-deps
+      with:
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-el9.x86_64-${{ hashFiles('deps/init/oceanbase.el9.x86_64.deps') }}
+        path: deps/3rd
+
+    # Regenerating the parser is a couple of minutes and fails first on a
+    # grammar mistake, so do it before the full build to keep the loop short.
+    - name: Check sql parser grammar
+      shell: bash
+      run: |
+        cd src/sql/parser
+        NEED_PARSER_CACHE=OFF bash gen_parser.sh
+        echo "--- parser generated ---"
+        ls -l sql_parser_mysql_mode_tab.c type_name.c
+
+    - name: Build
+      uses: ./.github/workflows/buildbase
+      with:
+        save_cache: 'false'
+        os: 'ubuntu22'
+
+    - name: Locate runtime binaries
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -x build_release/src/observer/seekdb
+        CLIENT_ROOT="deps/3rd/u01/obclient"
+        ls -l "$CLIENT_ROOT/bin" | head -30
+        test -x "$CLIENT_ROOT/bin/obclient"
+        test -x "$CLIENT_ROOT/bin/mysqltest"
+
+    # The file_sql suite stages its fixtures with ssh/scp against whatever
+    # host_ip() reports, so the runner has to be able to reach itself over ssh
+    # without a password. A stock runner image has neither sshd nor a key pair.
+    - name: Enable passwordless ssh to this host
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get install -y openssh-server >/dev/null
+        sudo ssh-keygen -A
+        sudo systemctl enable --now ssh || sudo service ssh start
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        if [ ! -f ~/.ssh/id_rsa ]; then
+          ssh-keygen -t rsa -b 2048 -N '' -f ~/.ssh/id_rsa -q
+        fi
+        touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+        grep -qxF "$(cat ~/.ssh/id_rsa.pub)" ~/.ssh/authorized_keys \
+          || cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+        printf 'Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n' > ~/.ssh/config
+        chmod 600 ~/.ssh/config
+        ssh -o BatchMode=yes -o ConnectTimeout=10 127.0.0.1 'echo ssh-self-ok'
+
+    - name: Start mock model service
+      shell: bash
+      run: |
+        set -euo pipefail
+        nohup python3 .github/script/seekdb/mock_ai_service.py serve 8000 \
+          > "$GITHUB_WORKSPACE/probe_out_mock.log" 2>&1 &
+        PAYLOAD='{"query":"probe","documents":["a","b"]}'
+        for _ in $(seq 1 50); do
+          if curl -fsS -m 2 -X POST http://127.0.0.1:8000/v1/rerank \
+               -H 'Content-Type: application/json' -d "$PAYLOAD" | grep -q relevance_score; then
+            echo "mock model service ready"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "mock model service did not become ready"
+        cat "$GITHUB_WORKSPACE/probe_out_mock.log" || true
+        exit 1
+
+    - name: Run probe
+      shell: bash
+      run: |
+        set -o pipefail
+        python3 .github/script/seekdb/probe_cases.py \
+          --prefix "${{ github.event.inputs.prefixes }}" \
+          --seekdb build_release/src/observer/seekdb \
+          --obclient deps/3rd/u01/obclient/bin/obclient \
+          --mysqltest deps/3rd/u01/obclient/bin/mysqltest \
+          --work-dir "$GITHUB_WORKSPACE/probe_out" 2>&1 | tee probe.log
+
+    - name: Collect instance logs
+      if: always()
+      shell: bash
+      run: |
+        if [[ -d probe_out/instance ]]; then
+          mkdir -p probe_out/logs
+          find probe_out/instance -maxdepth 3 -name '*.log' -exec cp -f {} probe_out/logs/ \; || true
+        fi
+        cp -f probe.log probe_out/ 2>/dev/null || true
+        cp -f probe_out_mock.log probe_out/ 2>/dev/null || true
+
+    - name: Upload probe output
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: seekdb-probe
+        path: probe_out
+        if-no-files-found: warn

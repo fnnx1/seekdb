@@ -25,14 +25,18 @@
 #else
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <fcntl.h>
+#include <unistd.h>
 #ifdef __APPLE__
 #include <ifaddrs.h>
 #include <net/if_dl.h>
 #elif defined(__ANDROID__)
 #include <ifaddrs.h>
 #include <linux/if_packet.h>
-#include <fcntl.h>
-#include <unistd.h>
+#else
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <linux/if_packet.h>
 #endif
 #endif
 #include "sql/engine/expr/ob_expr_uuid.h"
@@ -186,51 +190,80 @@ int ObUUIDNode::init()
     }
   }
 #else
-  // Linux: Use ioctl to get MAC address
-  struct ifreq ifr;
-  struct ifconf ifc;
-  char buf[1024];
-  int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-  if (sock == -1) {
-    ret = OB_ERR_UNEXPECTED;
-    LOG_ERROR("socket failed", K(ret), K(errno));
+  // Linux: use getifaddrs + AF_PACKET + sockaddr_ll to obtain a MAC address.
+  // The previous ioctl(SIOCGIFCONF) path failed as a whole whenever the kernel
+  // refused that single ioctl (e.g. network interface enumeration is filtered in
+  // a restricted sandbox), so startup aborted before SQL became ready. Each
+  // interface is now inspected independently and every failure is logged with
+  // the interface name and errno, so the log tells which step failed.
+  struct ifaddrs *ifaddr = NULL;
+  bool mac_addr_found = false;
+  bool any_link_addr = false;
+  int link_if_count = 0;
+  int getifaddrs_errno = 0;
+  if (getifaddrs(&ifaddr) != 0) {
+    getifaddrs_errno = errno;
+    LOG_WARN("getifaddrs failed, no mac address is enumerable", K(getifaddrs_errno));
   } else {
-    ifc.ifc_len = sizeof(buf);
-    ifc.ifc_buf = buf;
-    if (ioctl(sock, SIOCGIFCONF, &ifc) < 0) {
-      ret = OB_ERR_UNEXPECTED;
-    } else {
-      ifreq *it = ifc.ifc_req;
-      ifreq *end = it + (ifc.ifc_len / sizeof(ifreq));
-      bool mac_addr_found = false;
-      for (; it != end && OB_SUCC(ret); ++it) {
-        if (OB_ISNULL(it) || OB_ISNULL(it->ifr_name) || OB_ISNULL(ifr.ifr_name)) {
+    for (struct ifaddrs *ifa = ifaddr; NULL != ifa && !mac_addr_found && OB_SUCC(ret);
+         ifa = ifa->ifa_next) {
+      if (NULL == ifa->ifa_addr) {
+        continue;
+      }
+      if (AF_PACKET == ifa->ifa_addr->sa_family) {
+        if (ifa->ifa_flags & IFF_LOOPBACK) {
           continue;
-        } else {
-          strncpy(ifr.ifr_name, it->ifr_name, IFNAMSIZ - 1);
-          if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
-            if (!(ifr.ifr_flags & IFF_LOOPBACK)) {
-              if (ioctl(sock, SIOCGIFHWADDR, &ifr) == 0) {
-                MEMCPY(mac_addr_, ifr.ifr_hwaddr.sa_data, 6);
-                mac_addr_found = true;
-                break;
-              } else {
-                LOG_WARN("ioctl failed, SIOCGIFHWADDR", K(errno), K(it->ifr_name));
-              }
-            }
-          } else {
-            LOG_WARN("ioctl failed, SIOCGIFFLAGS", K(errno), K(it->ifr_name));
-          }
         }
-      }//end for
-      if (OB_FAIL(ret)) {
-      } else if (!mac_addr_found) {
-        ret = OB_ERR_UNEXPECTED;
-      } else {
-        is_inited_ = true;
+        ++link_if_count;
+        struct sockaddr_ll *sll = (struct sockaddr_ll *)ifa->ifa_addr;
+        any_link_addr = true;
+        if (6 == sll->sll_halen) {
+          MEMCPY(mac_addr_, sll->sll_addr, 6);
+          mac_addr_found = true;
+        } else {
+          LOG_INFO("link interface without a 6 byte mac address",
+                   "ifname", ifa->ifa_name, "sll_halen", static_cast<int>(sll->sll_halen));
+        }
       }
     }
-    close(sock);
+    freeifaddrs(ifaddr);
+  }
+  if (OB_FAIL(ret)) {
+  } else if (!mac_addr_found) {
+    // RFC 4122 section 4.5: when no usable MAC address is available the node ID
+    // must be a random 48 bit value with the multicast bit set. This keeps the
+    // UUID unique on this host without requiring access to interface information.
+    LOG_WARN("no usable mac address found, falling back to a random RFC 4122 node id",
+             K(getifaddrs_errno), K(any_link_addr), K(link_if_count));
+    int fd = open("/dev/urandom", O_RDONLY);
+    ssize_t nread = -1;
+    if (fd >= 0) {
+      nread = read(fd, mac_addr_, 6);
+      close(fd);
+    } else {
+      LOG_WARN("open /dev/urandom failed", K(errno));
+    }
+    if (6 != nread) {
+      // /dev/urandom is unavailable: seed from clock and address entropy instead of
+      // aborting startup, then still set the multicast bit.
+      LOG_WARN("read /dev/urandom failed, seeding node id from clock", "nread", nread, K(errno));
+      const uint64_t seed = clock() ^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(this)) ^
+                            static_cast<uint64_t>(getpid());
+      for (int i = 0; i < 6; ++i) {
+        mac_addr_[i] = static_cast<unsigned char>((seed >> (8 * i)) & 0xff);
+        mac_addr_[i] = static_cast<unsigned char>(mac_addr_[i] ^ (clock() & 0xff));
+      }
+    }
+    mac_addr_[0] |= 0x01;  // multicast bit: marks the node id as non-MAC derived
+    mac_addr_found = true;
+    LOG_INFO("using random UUID node id (no MAC address available)",
+             "ifname_count", link_if_count);
+  }
+  if (OB_FAIL(ret)) {
+  } else if (!mac_addr_found) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    is_inited_ = true;
   }
 #endif
   return ret;

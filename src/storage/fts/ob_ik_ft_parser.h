@@ -18,6 +18,7 @@
 #define _OCEANBASE_STORAGE_FTS_OB_IK_FT_PARSER_H_
 
 #include "lib/allocator/ob_allocator.h"
+#include "lib/allocator/page_arena.h"
 #include "storage/fts/dict/ob_ft_cache_container.h"
 #include "storage/fts/dict/ob_ft_dict.h"
 #include "storage/fts/dict/ob_ft_dict_def.h"
@@ -38,6 +39,7 @@ public:
       : allocator_(allocator),
         is_inited_(false),
         coll_type_(ObCollationType::CS_TYPE_INVALID),
+        ctx_alloc_(ObMemAttr("IKFTCtx")),
         ctx_(nullptr),
         hub_(hub),
         segmenters_(allocator_),
@@ -53,6 +55,12 @@ public:
   virtual ~ObIKFTParser() { reset(); }
 
   int init(const ObFTParserParam &param);
+
+  // Re-arms an already initialised parser for a new document. Dictionary views and
+  // the processor chain are kept; only the per-document token buffers are reset.
+  int reuse_ctx(const ObFTParserParam &param);
+
+  bool is_collation_compatible(const ObFTParserParam &param) const;
 
   int get_next_token(const char *&word,
                      int64_t &word_len,
@@ -94,6 +102,9 @@ private:
   bool is_inited_;
 
   ObCollationType coll_type_;
+  // Token buffers live here rather than in the caller's temporary allocator so a
+  // reused parser can hand them back between calls with a single reset.
+  ObArenaAllocator ctx_alloc_;
   TokenizeContext *ctx_;
   ObFTDictHub *hub_;
   ObList<ObIIKProcessor *, ObIAllocator> segmenters_;

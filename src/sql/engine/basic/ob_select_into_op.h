@@ -59,6 +59,7 @@ public:
       into_type_(T_INTO_OUTFILE),
       user_vars_(alloc),
       outfile_name_(),
+      header_line_(),
       field_str_(),
       line_str_(),
       closed_cht_(),
@@ -78,6 +79,7 @@ public:
   ObItemType into_type_;
   common::ObFixedArray<common::ObString, common::ObIAllocator> user_vars_;
   common::ObObj outfile_name_;
+  common::ObObj header_line_; // the header line of COPY ... (header)
   common::ObObj field_str_;
   common::ObObj line_str_;
   common::ObObj closed_cht_;
@@ -126,7 +128,8 @@ public:
       external_properties_(),
       format_type_(ObExternalFileFormat::FormatType::CSV_FORMAT),
       block_id_(0),
-      need_commit_(true)
+      need_commit_(true),
+      header_written_(false)
   {
   }
 
@@ -292,6 +295,7 @@ private:
   ObExternalFileFormat::FormatType format_type_;
   uint32_t block_id_;
   bool need_commit_;
+  bool header_written_;
   static const int64_t SHARED_BUFFER_SIZE = 2LL * 1024 * 1024;
 
 };

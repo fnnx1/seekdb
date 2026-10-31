@@ -125,6 +125,8 @@ private:
   int groupby_word(const ObFTWord &word, const int64_t word_cnt);
 private:
   ObObjMeta word_meta_;
+  // 词元入表用的 meta：解析器做过 casedown 时用二进制排序规则，避免哈希与比较逐字符转换
+  ObObjMeta map_word_meta_;
   common::ObIAllocator &allocator_;
   ObFTWordMap &word_map_;
   int64_t min_max_word_cnt_;

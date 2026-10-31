@@ -342,6 +342,7 @@ int ObAiServiceExecutor::insert_special_endpoint_for_version(ObMySQLTransaction 
   } else if (OB_FAIL(sql.add_column("parameters", ""))) {
   } else if (OB_FAIL(sql.add_column("request_transform_fn", ""))) {
   } else if (OB_FAIL(sql.add_column("response_transform_fn", ""))) {
+  } else if (OB_FAIL(sql.add_column(true /*is_null*/, "max_concurrency"))) {
   } else if (OB_FAIL(sql.splice_insert_sql(OB_ALL_AI_MODEL_ENDPOINT_TNAME, buffer))) {
   } else if (OB_FAIL(trans.write(buffer.ptr(), affected_rows))) {
   } else if (1 != affected_rows) {

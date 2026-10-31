@@ -39,6 +39,8 @@ public:
   static ObObjDatumMapType FTS_DOC_WORD_TYPES[4];
   static ObExprOperatorType FTS_INDEX_EXPR_TYPE[4];
   static ObExprOperatorType FTS_DOC_WORD_EXPR_TYPE[4];
+  // 词频哈希表的桶数上限，与原来按文本长度估算时的上限保持一致。
+  static constexpr int64_t FT_MAX_WORD_BUCKET = 997;
 
   ObFTIndexRowCache();
   ~ObFTIndexRowCache();
@@ -58,6 +60,8 @@ private:
   uint64_t row_idx_;
   bool is_fts_index_aux_;
   storage::ObFTParseHelper helper_;
+  // 扫描建索引时每篇文档都要统计词频，复用这张表可以省掉每篇一次建销哈希表的开销。
+  storage::ObFTWordMap ft_word_map_;
   bool is_inited_;
 
   DISALLOW_COPY_AND_ASSIGN(ObFTIndexRowCache);
@@ -186,6 +190,7 @@ public:
                                          const ObDatum &doc_id_datum,
                                          const ObString &fulltext,
                                          const bool is_fts_index_aux,
+                                         storage::ObFTWordMap *ft_word_map,
                                          ObDomainIndexRow &word_rows);
   static int generate_multivalue_index_rows(
       ObIAllocator &allocator,

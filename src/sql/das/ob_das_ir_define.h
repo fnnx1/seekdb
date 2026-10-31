@@ -87,6 +87,7 @@ public:
   bool need_calc_relevance() const { return nullptr != relevance_expr_; }
   bool need_proj_relevance_score() const { return nullptr != relevance_proj_col_; }
   bool need_inv_idx_agg() const { return has_inv_agg_ && need_calc_relevance(); }
+  bool is_skip_bm25_score() const { return 0 != reserved_ir_scan_flag_; }
   bool need_block_max_scan() const { return has_block_max_scan_; }
   bool need_avg_doc_len_est() const { return has_avg_doc_len_est_ && nullptr != avg_doc_token_cnt_expr_; }
   bool has_pushdown_topk() const { return nullptr != topk_limit_expr_; }
@@ -204,7 +205,11 @@ public:
   ObDASIRScanRtDef()
     : ObDASAttachRtDef(DAS_OP_IR_SCAN),
       fts_idx_(OB_INVALID_INDEX),
-      minimum_should_match_(0) {}
+      minimum_should_match_(0),
+      count_only_(false) {}
+
+  bool is_count_only() const { return count_only_; }
+  void set_count_only(const bool count_only) { count_only_ = count_only; }
 
   virtual ~ObDASIRScanRtDef() {}
 
@@ -255,6 +260,9 @@ public:
   // fts_idx_ is dynamically generated during execution based on the rtdef tree and does not need to be serialized.
   int64_t fts_idx_;
   int64_t minimum_should_match_;
+  // runtime only: the scan result is consumed as a row count, no column is
+  // projected, so the text retrieval iterator may skip the row materialisation.
+  bool count_only_;
 };
 
 struct ObDASIRAuxLookupCtDef : ObDASAttachCtDef

@@ -132,9 +132,206 @@ int ObTransformSimplifyExpr::transform_one_stmt(common::ObIArray<ObParentDMLStmt
       OPT_TRACE("canonicalize condition:", is_happened);
     }
   }
+  if (OB_SUCC(ret)) {
+    if (OB_FAIL(reduce_identity_operands(stmt, is_happened))) {
+    } else {
+      trans_happened |= is_happened;
+      OPT_TRACE("reduce identity operands:", is_happened);
+    }
+  }
   if (OB_SUCC(ret) && trans_happened) {
     if (OB_FAIL(add_transform_hint(*stmt))) {
     }
+  }
+  return ret;
+}
+
+int ObTransformSimplifyExpr::reduce_identity_operands(ObDMLStmt *stmt, bool &trans_happened)
+{
+  int ret = OB_SUCCESS;
+  trans_happened = false;
+  if (OB_ISNULL(stmt) || OB_ISNULL(ctx_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(inner_reduce_identity_operands(stmt->get_condition_exprs(), trans_happened))) {
+  } else if (stmt->is_select_stmt() &&
+             OB_FAIL(inner_reduce_identity_operands(static_cast<ObSelectStmt *>(stmt)->get_having_exprs(),
+                                                    trans_happened))) {
+  } else {
+    ObIArray<JoinedTable *> &joined_tables = stmt->get_joined_tables();
+    for (int64_t i = 0; OB_SUCC(ret) && !trans_happened && i < joined_tables.count(); ++i) {
+      bool cur_happened = false;
+      if (OB_FAIL(SMART_CALL(reduce_join_condition_operands(joined_tables.at(i), cur_happened)))) {
+      } else {
+        trans_happened |= cur_happened;
+      }
+    }
+  }
+  return ret;
+}
+
+int ObTransformSimplifyExpr::reduce_join_condition_operands(TableItem *table, bool &trans_happened)
+{
+  int ret = OB_SUCCESS;
+  trans_happened = false;
+  if (OB_ISNULL(table)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (table->is_joined_table()) {
+    // This fork keeps a joined table as a binary node (left / right), so the walk visits
+    // the two children instead of a flat join-item list.
+    JoinedTable *joined_table = static_cast<JoinedTable *>(table);
+    bool left_happened = false;
+    bool right_happened = false;
+    if (OB_FAIL(SMART_CALL(reduce_join_condition_operands(joined_table->left_table_, left_happened)))) {
+    } else if (OB_FAIL(SMART_CALL(reduce_join_condition_operands(joined_table->right_table_, right_happened)))) {
+    } else {
+      trans_happened = left_happened || right_happened;
+    }
+    if (OB_SUCC(ret) && !trans_happened) {
+      if (OB_FAIL(inner_reduce_identity_operands(joined_table->get_join_conditions(), trans_happened))) {
+      }
+    }
+  }
+  return ret;
+}
+
+int ObTransformSimplifyExpr::inner_reduce_identity_operands(common::ObIArray<ObRawExpr *> &conditions,
+                                                            bool &trans_happened)
+{
+  int ret = OB_SUCCESS;
+  for (int64_t i = 0; OB_SUCC(ret) && !trans_happened && i < conditions.count(); ++i) {
+    if (OB_ISNULL(conditions.at(i))) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_FAIL(SMART_CALL(reduce_identity_operands(conditions.at(i), trans_happened)))) {
+    }
+  }
+  return ret;
+}
+
+// Remove operands that cannot change the value of an AND / OR chain, so that two
+// semantically equivalent spellings of the same filter produce the same
+// predicate. A predicate that is provably FALSE is an identity for OR, and a
+// predicate that is provably TRUE is an identity for AND:
+//
+//   category = 1 OR (age > 1000)      ->  category = 1     -- if age > 1000 is always false
+//   category = 1 AND (age > 100)      ->  category = 1     -- if age > 100 is always true
+//
+// An identity operand is only removed from the operator it belongs to. Dropping
+// a FALSE operand from an AND chain (or a TRUE operand from an OR chain) would
+// change the result.
+//
+// Correctness of the removal rests on the guards checked in
+// is_identity_operand(): the operand must be a constant that is free of
+// warnings and errors, and it must not contain a subquery. A constant operand
+// has no side effect, so dropping it cannot change the diagnostics of the
+// statement, and a non-NULL constant operand satisfies
+//
+//   FALSE OR  x == x        TRUE  AND x == x
+//
+// for every row, including the rows where x evaluates to NULL.
+int ObTransformSimplifyExpr::reduce_identity_operands(ObRawExpr *&expr, bool &trans_happened)
+{
+  int ret = OB_SUCCESS;
+  bool child_happened = false;
+  trans_happened = false;
+  if (OB_ISNULL(expr) || OB_ISNULL(ctx_) || OB_ISNULL(ctx_->expr_factory_)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("get unexpected null", K(ret), K(expr), KP(ctx_));
+  } else if ((T_OP_AND != expr->get_expr_type() && T_OP_OR != expr->get_expr_type()) ||
+             expr->get_param_count() < 2) {
+    // do nothing: the identity rule only applies to a multi-operand AND / OR
+  } else {
+    ObOpRawExpr *op_expr = static_cast<ObOpRawExpr *>(expr);
+    for (int64_t i = 0; OB_SUCC(ret) && i < op_expr->get_param_count(); ++i) {
+      ObRawExpr *child = op_expr->get_param_expr(i);
+      bool cur_happened = false;
+      if (OB_FAIL(SMART_CALL(reduce_identity_operands(child, cur_happened)))) {
+      } else if (OB_ISNULL(child)) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("get unexpected null child", K(ret));
+      } else {
+        // the recursive call may replace the child with a new expression
+        op_expr->get_param_expr(i) = child;
+        child_happened |= cur_happened;
+      }
+    }
+    if (OB_SUCC(ret)) {
+      const bool is_or = T_OP_OR == expr->get_expr_type();
+      ObSEArray<ObRawExpr *, 8> kept_exprs;
+      bool removed = false;
+      for (int64_t i = 0; OB_SUCC(ret) && i < op_expr->get_param_count(); ++i) {
+        ObRawExpr *child = op_expr->get_param_expr(i);
+        bool is_identity = false;
+        if (OB_FAIL(is_identity_operand(child, is_or, is_identity))) {
+          LOG_WARN("failed to check identity operand", K(ret), KPC(child));
+        } else if (is_identity) {
+          removed = true;
+        } else if (OB_FAIL(kept_exprs.push_back(child))) {
+          LOG_WARN("failed to push back kept operand", K(ret));
+        }
+      }
+      if (OB_FAIL(ret)) {
+      } else if (!removed) {
+        // do nothing
+      } else if (kept_exprs.empty()) {
+        // Every operand is an identity, so the expression is a constant. Leave it
+        // alone here and let the constant folding rules of this transform produce
+        // the constant, rather than creating a new expression for it by hand.
+      } else if (1 == kept_exprs.count()) {
+        // An AND / OR node must keep at least two operands, otherwise the plan
+        // printer and the range extractor see a malformed node. Wrap the single
+        // surviving operand in an AND / OR with a constant identity instead.
+        ObRawExpr *identity = NULL;
+        if (OB_FAIL(ObRawExprUtils::build_const_bool_expr(ctx_->expr_factory_, identity, !is_or))) {
+          LOG_WARN("failed to build const bool expr", K(ret));
+        } else if (OB_ISNULL(identity)) {
+          ret = OB_ERR_UNEXPECTED;
+          LOG_WARN("get unexpected null const expr", K(ret));
+        } else if (OB_FAIL(op_expr->set_param_exprs(kept_exprs.at(0), identity))) {
+          LOG_WARN("failed to set param exprs", K(ret));
+        } else if (OB_FAIL(op_expr->formalize(ctx_->session_info_))) {
+          LOG_WARN("failed to formalize expr", K(ret));
+        } else {
+          trans_happened = true;
+        }
+      } else if (OB_FAIL(op_expr->set_param_exprs(kept_exprs))) {
+        LOG_WARN("failed to set param exprs", K(ret));
+      } else if (OB_FAIL(op_expr->formalize(ctx_->session_info_))) {
+        LOG_WARN("failed to formalize expr", K(ret));
+      } else {
+        trans_happened = true;
+      }
+    }
+    if (OB_SUCC(ret) && child_happened) {
+      trans_happened = true;
+    }
+  }
+  return ret;
+}
+
+// A constant operand whose value is FALSE is an identity of OR, and a constant
+// operand whose value is TRUE is an identity of AND. Constant operands of the
+// other kind are absorbing elements ("TRUE OR x" is always TRUE), and are left
+// alone here because dropping them would have to be reported differently.
+int ObTransformSimplifyExpr::is_identity_operand(ObRawExpr *child, const bool is_or, bool &is_identity)
+{
+  int ret = OB_SUCCESS;
+  bool is_true = false;
+  bool is_false = false;
+  is_identity = false;
+  if (OB_ISNULL(child) || OB_ISNULL(ctx_)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("get unexpected null", K(ret), K(child), KP(ctx_));
+  } else if (child->has_flag(CNT_SUB_QUERY)) {
+    // do nothing: never drop an operand that contains a subquery
+  } else if (!child->is_static_scalar_const_expr()) {
+    // do nothing: only a constant operand is known to be identical on every row,
+    // and only a constant operand is free of side effects
+  } else if (OB_FAIL(ObTransformUtils::extract_const_bool_expr_result(ctx_, child, is_true, is_false, true))) {
+    LOG_WARN("failed to extract const bool expr result", K(ret), KPC(child));
+  } else if (is_or && is_false) {
+    is_identity = true;
+  } else if (!is_or && is_true) {
+    is_identity = true;
   }
   return ret;
 }

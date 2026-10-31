@@ -16,6 +16,9 @@
 
 #define USING_LOG_PREFIX SQL_RESV
 #include "sql/resolver/ob_resolver.h"
+#include "sql/parser/ob_parser.h"
+#include "sql/resolver/dml/ob_select_resolver.h"
+#include "lib/string/ob_sql_string.h"
 #include "lib/utility/ob_smart_call.h"
 #include "lib/stat/ob_diagnostic_info_guard.h"
 #include "sql/resolver/cmd/ob_alter_system_resolver.h"
@@ -133,6 +136,202 @@ int ObResolver::select_stmt_resolver_func(ObResolverParams &params, const ParseN
     if (OB_FAIL(SMART_CALL(stmt_resolver.resolve(parse_tree)))) {
     }
     stmt = stmt_resolver.get_basic_stmt();
+  }
+  return ret;
+}
+
+// DESCRIBE <query> returns the schema of the query. The parser marks such a
+// statement by carrying a sentinel node in the `set_statement_id` slot of the
+// T_EXPLAIN node (see the DESCRIBE rule of the grammar).
+static const int64_t FILE_DESCRIBE_MARK = 10002026;
+
+static bool is_file_describe(const ParseNode &parse_tree)
+{
+  return T_EXPLAIN == parse_tree.type_
+      && 5 == parse_tree.num_child_
+      && OB_NOT_NULL(parse_tree.children_)
+      && OB_NOT_NULL(parse_tree.children_[3])
+      && T_INT == parse_tree.children_[3]->type_
+      && FILE_DESCRIBE_MARK == parse_tree.children_[3]->value_;
+}
+
+static void file_describe_type_name(const ObObjType type, const char *&name)
+{
+  switch (type) {
+    case ObTinyIntType: name = "BOOLEAN"; break;
+    case ObIntType: name = "BIGINT"; break;
+    case ObDoubleType: name = "DOUBLE"; break;
+    case ObDateType: name = "DATE"; break;
+    case ObDateTimeType: name = "DATETIME"; break;
+    default: name = "VARCHAR"; break;
+  }
+}
+
+static int file_describe_append_literal(ObSqlString &sql, const ObString &value)
+{
+  int ret = OB_SUCCESS;
+  if (OB_FAIL(sql.append("'"))) {
+  } else {
+    for (int64_t i = 0; OB_SUCC(ret) && i < value.length(); ++i) {
+      const char ch = value.ptr()[i];
+      if ('\'' == ch) {
+        ret = sql.append("''");
+      } else {
+        ret = sql.append(&ch, 1);
+      }
+    }
+    if (OB_SUCC(ret)) {
+      ret = sql.append("'");
+    }
+  }
+  return ret;
+}
+
+// Resolves `DESCRIBE <query>` into the inferred schema of the query. The file
+// table is materialized as a values table by the resolver, so its column
+// names, cell types and null cells are all available at resolve time; the
+// statement itself is generated as a select over constant rows, which keeps the
+// execution path completely ordinary.
+static int resolve_file_describe(ObResolverParams &params,
+                                 const ParseNode &parse_tree,
+                                 ObStmt *&stmt)
+{
+  int ret = OB_SUCCESS;
+  const ParseNode *select_node = NULL;
+  ObStmt *described_stmt = NULL;
+  ObSelectStmt *described_select = NULL;
+  TableItem *file_table = NULL;
+  ObSqlString sql;
+  ObString sql_str;
+  ParseResult describe_result;
+  if (OB_ISNULL(params.allocator_) || OB_ISNULL(params.session_info_)
+      || OB_ISNULL(params.expr_factory_) || OB_ISNULL(params.schema_checker_)
+      || OB_ISNULL(params.query_ctx_)) {
+    ret = OB_NOT_INIT;
+  } else if (OB_UNLIKELY(5 != parse_tree.num_child_ || OB_ISNULL(parse_tree.children_))
+             || OB_ISNULL(select_node = parse_tree.children_[4])
+             || OB_UNLIKELY(T_SELECT != select_node->type_)) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "describe of this statement");
+  } else {
+    HEAP_VAR(ObResolver, inner_resolver, params) {
+      // the described query is resolved only to learn the inferred schema
+      if (OB_FAIL(SMART_CALL(inner_resolver.resolve(
+              ObResolver::IS_NOT_PREPARED_STMT, *select_node, described_stmt)))) {
+        LOG_WARN("failed to resolve the described query", K(ret));
+      } else if (OB_ISNULL(described_stmt) || !described_stmt->is_select_stmt()) {
+        ret = OB_ERR_UNEXPECTED;
+      } else {
+        described_select = static_cast<ObSelectStmt *>(described_stmt);
+      }
+      if (OB_SUCC(ret)) {
+        const ObIArray<TableItem *> &table_items = described_select->get_table_items();
+        for (int64_t i = 0; OB_SUCC(ret) && NULL == file_table && i < table_items.count(); ++i) {
+          TableItem *item = table_items.at(i);
+          if (OB_NOT_NULL(item) && item->is_values_table()
+              && OB_NOT_NULL(item->values_table_def_)) {
+            file_table = item;
+          }
+        }
+        if (OB_SUCC(ret) && OB_ISNULL(file_table)) {
+          ret = OB_NOT_SUPPORTED;
+          LOG_USER_ERROR(OB_NOT_SUPPORTED, "describe of a query without a file table");
+        }
+      }
+      if (OB_SUCC(ret)) {
+        const ObValuesTableDef *table_def = file_table->values_table_def_;
+        const ObIArray<ColumnItem> &column_items = described_select->get_column_items();
+        const int64_t column_cnt = table_def->column_cnt_;
+        if (OB_UNLIKELY(column_cnt <= 0)) {
+          ret = OB_ERR_UNEXPECTED;
+          LOG_WARN("invalid file table definition", K(column_cnt), K(ret));
+        } else if (OB_FAIL(sql.append("select `column_name`, `column_type`, `null`, `key`, "
+                                      "`default`, `extra` from ("))) {
+          LOG_WARN("failed to build the describe statement", K(ret));
+        }
+        for (int64_t c = 0; OB_SUCC(ret) && c < column_cnt; ++c) {
+          const ObObjParam *sample = NULL;
+          bool has_null = false;
+          const ObString *column_name = NULL;
+          for (int64_t k = 0; OB_SUCC(ret) && NULL == column_name && k < column_items.count(); ++k) {
+            const ColumnItem &column_item = column_items.at(k);
+            if (column_item.table_id_ == file_table->table_id_
+                && column_item.column_id_ == static_cast<uint64_t>(c) + OB_APP_MIN_COLUMN_ID) {
+              column_name = &column_item.column_name_;
+            }
+          }
+          if (OB_ISNULL(column_name)) {
+            ret = OB_ERR_UNEXPECTED;
+            LOG_WARN("file table column is missing from the statement", K(c), K(ret));
+          }
+          for (int64_t r = 0; OB_SUCC(ret) && r < table_def->row_cnt_; ++r) {
+            const ObObjParam &cell = table_def->access_objs_.at(r * column_cnt + c);
+            if (cell.is_null()) {
+              has_null = true;
+            } else if (NULL == sample) {
+              sample = &cell;
+            }
+          }
+          // a column without any non null cell is inferred as boolean by the
+          // file readers, so the sample falls back to the same type
+          const char *type_name = NULL;
+          file_describe_type_name(NULL == sample ? ObTinyIntType : sample->get_type(), type_name);
+          if (OB_SUCC(ret) && c > 0 && OB_FAIL(sql.append(" union all "))) {
+            LOG_WARN("failed to build the describe statement", K(ret));
+          }
+          if (OB_SUCC(ret) && OB_FAIL(sql.append_fmt("select %ld as ft_ord, ", c))) {
+            LOG_WARN("failed to build the describe statement", K(ret));
+          }
+          if (OB_SUCC(ret) && OB_FAIL(file_describe_append_literal(sql, *column_name))) {
+            LOG_WARN("failed to build the describe statement", K(ret));
+          }
+          if (OB_SUCC(ret) && OB_FAIL(sql.append(" as `column_name`, "))) {
+            LOG_WARN("failed to build the describe statement", K(ret));
+          }
+          if (OB_SUCC(ret)) {
+            ObString type_str(type_name);
+            if (OB_FAIL(file_describe_append_literal(sql, type_str))) {
+              LOG_WARN("failed to build the describe statement", K(ret));
+            }
+          }
+          if (OB_SUCC(ret) && OB_FAIL(sql.append(" as `column_type`, "))) {
+            LOG_WARN("failed to build the describe statement", K(ret));
+          }
+          if (OB_SUCC(ret)) {
+            ObString null_str(has_null ? "YES" : "NO");
+            if (OB_FAIL(file_describe_append_literal(sql, null_str))) {
+              LOG_WARN("failed to build the describe statement", K(ret));
+            }
+          }
+          if (OB_SUCC(ret) && OB_FAIL(sql.append(" as `null`, NULL as `key`, NULL as `default`, "
+                                                 "NULL as `extra`"))) {
+            LOG_WARN("failed to build the describe statement", K(ret));
+          }
+        }
+        if (OB_SUCC(ret) && OB_FAIL(sql.append(") ft_describe order by ft_ord"))) {
+          LOG_WARN("failed to build the describe statement", K(ret));
+        }
+      }
+      if (OB_SUCC(ret)) {
+        ObParser parser(*params.allocator_,
+                        params.session_info_->get_sql_mode(),
+                        params.session_info_->get_charsets4parser());
+        if (OB_FAIL(ob_write_string(*params.allocator_, sql.string(), sql_str))) {
+          LOG_WARN("failed to copy the describe statement", K(ret));
+        } else if (OB_FAIL(parser.parse(sql_str, describe_result))) {
+          LOG_WARN("failed to parse the describe statement", K(ret), K(sql_str));
+        } else if (OB_ISNULL(describe_result.result_tree_)
+                   || OB_ISNULL(describe_result.result_tree_->children_)
+                   || OB_ISNULL(describe_result.result_tree_->children_[0])) {
+          ret = OB_ERR_UNEXPECTED;
+          LOG_WARN("empty describe statement", K(ret));
+        } else if (OB_FAIL(SMART_CALL(inner_resolver.resolve(
+                       ObResolver::IS_NOT_PREPARED_STMT,
+                       *describe_result.result_tree_->children_[0], stmt)))) {
+          LOG_WARN("failed to resolve the describe statement", K(ret));
+        }
+      }
+    }
   }
   return ret;
 }
@@ -473,7 +672,11 @@ int ObResolver::resolve(IsPrepared if_prepared, const ParseNode &parse_tree, ObS
         break;
       }
       case T_EXPLAIN: {
-        REGISTER_STMT_RESOLVER(Explain);
+        if (is_file_describe(*real_parse_tree)) {
+          ret = resolve_file_describe(params_, *real_parse_tree, stmt);
+        } else {
+          REGISTER_STMT_RESOLVER(Explain);
+        }
         break;
       }
       case T_ALTER_SYSTEM_SET: {

@@ -2084,6 +2084,32 @@ int ObDDLResolver::resolve_normal_column_attribute(ObColumnSchemaV2 &column,
     for (int64_t i = 0; OB_SUCC(ret) && i < attrs_node->num_child_; ++i) {
       ParseNode *attr_node = attrs_node->children_[i];
       switch (attr_node->type_) {
+      case T_AI_COLUMN_EXPR: {
+        // <type> AI COLUMN (<ai function>) [WITH (...)] on a column definition.
+        // The column itself keeps its declared type; ObCreateTableResolver turns this
+        // attribute into the hidden state columns described by __all_ai_column. Reject
+        // shapes that can never be an AI column here, before any schema is published.
+        // AI_COMPLETE and AI_EMBED are still plain function calls at this point, the
+        // dedicated expression node types only appear after expression resolution.
+        ParseNode *ai_call = attr_node->children_[0];
+        ParseNode *func_name_node = NULL != ai_call ? ai_call->children_[0] : NULL;
+        ObString func_name;
+        if (NULL != func_name_node && NULL != func_name_node->str_value_) {
+          func_name.assign_ptr(func_name_node->str_value_, func_name_node->str_len_);
+        }
+        if (OB_ISNULL(ai_call) || OB_ISNULL(func_name_node)) {
+          ret = OB_ERR_UNEXPECTED;
+          SQL_RESV_LOG(WARN, "AI column call is null", K(ret),
+                       K(column.get_column_name_str()));
+        } else if (0 != func_name.case_compare("ai_complete")
+                   && 0 != func_name.case_compare("ai_embed")) {
+          ret = OB_NOT_SUPPORTED;
+          LOG_USER_ERROR(OB_NOT_SUPPORTED, "AI column without AI_COMPLETE or AI_EMBED");
+          SQL_RESV_LOG(WARN, "AI column requires an AI function", K(ret),
+                       K(column.get_column_name_str()), K(func_name));
+        }
+        break;
+      }
       case T_CONSTR_NOT_NULL: {
         if (OB_FAIL(resolve_normal_column_attribute_constr_not_null(column, attr_node, resolve_stat))) {
         }

@@ -77,7 +77,9 @@ int ObAIFuncClient::init(common::ObIAllocator &allocator, const common::ObString
 {
   int ret = OB_SUCCESS;
   int64_t remain_timeout_us = THIS_WORKER.is_timeout_ts_valid() ? THIS_WORKER.get_timeout_remain() : timeout_sec_ * 1000000;
-  if (OB_ISNULL(url) || headers.empty()) {
+  // A provider can legitimately need no extra header (a local model server without
+  // authentication), so an empty header list must not block the request.
+  if (OB_ISNULL(url)) {
     ret = OB_INVALID_ARGUMENT;
   } else {
     allocator_ = &allocator;

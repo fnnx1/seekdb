@@ -118,6 +118,7 @@ struct ObSelectIntoItem
   ObSelectIntoItem()
       : into_type_(),
         outfile_name_(),
+        header_line_(),
         field_str_(),
         line_str_(),
         user_vars_(),
@@ -145,6 +146,7 @@ struct ObSelectIntoItem
   int assign(const ObSelectIntoItem &other) {
     into_type_ = other.into_type_;
     outfile_name_ = other.outfile_name_;
+    header_line_ = other.header_line_;
     field_str_ = other.field_str_;
     line_str_ = other.line_str_;
     closed_cht_ = other.closed_cht_;
@@ -162,6 +164,7 @@ struct ObSelectIntoItem
                 const ObSelectIntoItem &other);
   TO_STRING_KV(K_(into_type),
                K_(outfile_name),
+               K_(header_line),
                K_(field_str),
                K_(line_str),
                K_(closed_cht),
@@ -174,6 +177,7 @@ struct ObSelectIntoItem
                K_(external_properties));
   ObItemType into_type_;
   common::ObObj outfile_name_;
+  common::ObObj header_line_; // header line written by COPY ... (header)
   common::ObObj field_str_; // field terminated str
   common::ObObj line_str_; // line terminated str
   common::ObSEArray<common::ObString, 16> user_vars_; // user variables
