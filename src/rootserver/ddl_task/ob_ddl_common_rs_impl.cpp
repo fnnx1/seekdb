@@ -538,7 +538,10 @@ int ObDDLTaskUtil::generate_build_replica_sql(const int64_t data_table_id,
         // keys in every comparison. The sorter falls back to plain comparisons for
         // keys it can not encode, so the result is unchanged.
         const char *enable_newsort =
-            (dest_table_schema->is_fts_index_aux() || dest_table_schema->is_fts_doc_word_aux())
+            (dest_table_schema->is_fts_index_aux()
+             || dest_table_schema->is_fts_doc_word_aux()
+             || dest_table_schema->is_rowkey_doc_id()
+             || dest_table_schema->is_doc_id_rowkey())
             ? "true" : "false";
         if (OB_FAIL(ret)) {
         } else {
