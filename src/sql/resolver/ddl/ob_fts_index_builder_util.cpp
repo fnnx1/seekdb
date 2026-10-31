@@ -1047,7 +1047,14 @@ int ObFtsIndexBuilderUtil::decide_parallelism(
       case share::schema::ObIndexType::INDEX_TYPE_DOC_ID_ROWKEY_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_FTS_INDEX_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_FTS_DOC_WORD_LOCAL:
-        decided_parallelism = MAX(original_parallelism / 3, 1L);
+        // A fulltext index build is split into a small number of independently
+        // scheduled auxiliary-table builds. They are submitted back to back and
+        // run concurrently, so dividing the incoming degree by three leaves the
+        // whole build single threaded for the degree a statement without a
+        // parallel hint carries. Keeping a floor of two lets one auxiliary
+        // build overlap its producer/consumer with the other without
+        // oversubscribing a small box; an explicit larger hint is honored.
+        decided_parallelism = MAX(original_parallelism, 2L);
         break;
       case share::schema::ObIndexType::INDEX_TYPE_NORMAL_MULTIVALUE_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_UNIQUE_MULTIVALUE_LOCAL:
