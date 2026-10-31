@@ -23,6 +23,7 @@
 #include "data_plane/blocksstable/ob_datum_row.h"
 #include "sql/engine/ob_physical_plan.h"
 #include "sql/das/ob_das_attach_define.h"
+#include "sql/das/ob_das_ir_define.h"
 #include "sql/das/ob_das_vec_define.h"
 #include "share/geo/ob_geo_utils.h"
 #include "share/ob_ddl_checksum.h"
@@ -59,6 +60,29 @@ bool find_skip_delta_buffer_in_ctdef(const ObDASBaseCtDef *ctdef)
     }
   }
   return found;
+}
+// For text-retrieval (domain index) scans the merge iterator early-stops on
+// inv_idx_scan_rtdef()->limit_param_.  The generic limit-pushdown path in
+// ObTableScanOp::init_das_scan_rtdef deliberately skips attached scans, so the
+// inverted-index scan rtdef never receives the table-scan limit and query_limit
+// degenerates to a full union scan followed by LIMIT at the upper layer.  Walk
+// the attach rtdef tree and propagate the limit into every IR scan's inv-idx
+// child so the DAAT/TAAT iterator can stop early.
+void set_text_retrieval_limit(ObDASBaseRtDef *rtdef, const common::ObLimitParam &limit_param)
+{
+  if (OB_ISNULL(rtdef)) {
+    return;
+  } else if (DAS_OP_IR_SCAN == rtdef->op_type_) {
+    ObDASIRScanRtDef *ir_rtdef = static_cast<ObDASIRScanRtDef *>(rtdef);
+    ObDASScanRtDef *inv_idx_rtdef = ir_rtdef->get_inv_idx_scan_rtdef();
+    if (OB_NOT_NULL(inv_idx_rtdef)) {
+      inv_idx_rtdef->limit_param_ = limit_param;
+    }
+  } else if (OB_NOT_NULL(rtdef->children_)) {
+    for (int64_t i = 0; i < rtdef->children_cnt_; ++i) {
+      set_text_retrieval_limit(rtdef->children_[i], limit_param);
+    }
+  }
 }
 }  // anonymous namespace
 
@@ -1060,10 +1084,13 @@ int ObTableScanOp::init_table_scan_rtdef()
       ret = OB_ALLOCATE_MEMORY_FAILED;
     } else if (OB_FAIL(init_attach_scan_rtdef(MY_CTDEF.attach_spec_.attach_ctdef_,
                                               tsc_rtdef_.attach_rtinfo_->attach_rtdef_))) {
-    } else if (tsc_rtdef_.attach_rtinfo_->pushdown_tasks_.empty()) {
-      //has no pushdown task, means all attach task can be pushdown
-      if (OB_FAIL(tsc_rtdef_.attach_rtinfo_->pushdown_tasks_.push_back(
-          tsc_rtdef_.attach_rtinfo_->attach_rtdef_))) {
+    } else {
+      set_text_retrieval_limit(tsc_rtdef_.attach_rtinfo_->attach_rtdef_, limit_param_);
+      if (tsc_rtdef_.attach_rtinfo_->pushdown_tasks_.empty()) {
+        //has no pushdown task, means all attach task can be pushdown
+        if (OB_FAIL(tsc_rtdef_.attach_rtinfo_->pushdown_tasks_.push_back(
+            tsc_rtdef_.attach_rtinfo_->attach_rtdef_))) {
+        }
       }
     }
   }
