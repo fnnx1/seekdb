@@ -157,6 +157,7 @@ public:
         schema::ObColumnSchemaV2 *&doc_id_col);
   static int decide_parallelism(
         const share::schema::ObIndexType index_type,
+        const bool is_beng_parser,
         const int64_t original_parallelism,
         int64_t &decided_parallelism);
 private:

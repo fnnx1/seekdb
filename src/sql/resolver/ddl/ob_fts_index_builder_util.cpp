@@ -1033,6 +1033,7 @@ int ObFtsIndexBuilderUtil::generate_doc_id_column(
 
 int ObFtsIndexBuilderUtil::decide_parallelism(
     const share::schema::ObIndexType index_type,
+    const bool is_beng_parser,
     const int64_t original_parallelism,
     int64_t &decided_parallelism)
 {
@@ -1054,7 +1055,14 @@ int ObFtsIndexBuilderUtil::decide_parallelism(
         // parallel hint carries. Keeping a floor of two lets one auxiliary
         // build overlap its producer/consumer with the other without
         // oversubscribing a small box; an explicit larger hint is honored.
-        decided_parallelism = MAX(original_parallelism, 2L);
+        if (is_beng_parser) {
+          // The beng parser's auxiliary tables are cheapest when the small
+          // English build stays serial; the floor helps the ik builds, but
+          // contending with beng's own consumers is a net loss on 4 CPUs.
+          decided_parallelism = MAX(original_parallelism / 3, 1L);
+        } else {
+          decided_parallelism = MAX(original_parallelism, 2L);
+        }
         break;
       case share::schema::ObIndexType::INDEX_TYPE_NORMAL_MULTIVALUE_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_UNIQUE_MULTIVALUE_LOCAL:
