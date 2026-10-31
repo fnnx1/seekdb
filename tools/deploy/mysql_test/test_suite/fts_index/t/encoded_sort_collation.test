@@ -1,0 +1,18 @@
+# Exercise the encoded sort path selected by compatible fulltext builds.
+# Include every ASCII byte, case/punctuation boundaries, padding and Unicode.
+SET NAMES utf8mb4;
+--disable_warnings
+DROP TABLE IF EXISTS fts_encoded_sort;
+DROP TABLE IF EXISTS fts_encoded_digits;
+--enable_warnings
+CREATE TABLE fts_encoded_digits(n INT PRIMARY KEY);
+INSERT INTO fts_encoded_digits VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE fts_encoded_sort(id INT PRIMARY KEY, v VARCHAR(64) COLLATE utf8mb4_general_ci);
+INSERT INTO fts_encoded_sort SELECT n, CONCAT(CHAR(n),CHAR(MOD(n*37,128)),CHAR(MOD(n*19,128))) FROM (SELECT a.n*100+b.n*10+c.n AS n FROM fts_encoded_digits a CROSS JOIN fts_encoded_digits b CROSS JOIN fts_encoded_digits c) t WHERE n<128;
+INSERT INTO fts_encoded_sort VALUES(200,NULL),(201,''),(202,' '),(203,'  '),(204,'a'),(205,'A'),(206,'a '),(207,'A  '),(208,'['),(209,'_'),(210,'`'),(211,'z'),(212,'Z'),(213,'{'),(214,'aZ'),(215,'A['),(216,UNHEX('6100')),(217,UNHEX('612000')),(218,UNHEX('612009')),(219,'aé'),(220,'Á'),(221,'ä'),(222,'数据库'),(223,'数据'),(224,'😀'),(225,'a😀'),(226,'B数据库'),(227,'a数据库'),(228,'résumé'),(229,'RESUME'),(230,'ß'),(231,'s'),(232,'ss');
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'true') */ id, HEX(v) FROM fts_encoded_sort ORDER BY v,id;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'true') */ id, HEX(v) FROM fts_encoded_sort ORDER BY v DESC,id DESC;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'true') */ id, HEX(v) FROM fts_encoded_sort ORDER BY v,id LIMIT 25 OFFSET 45;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'true') */ id, HEX(v) FROM fts_encoded_sort ORDER BY v COLLATE utf8mb4_bin,id;
+DROP TABLE fts_encoded_sort;
+DROP TABLE fts_encoded_digits;

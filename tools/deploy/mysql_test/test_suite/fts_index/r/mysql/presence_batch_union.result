@@ -1,0 +1,203 @@
+set names utf8mb4;
+drop table if exists presence_batch_union;
+drop table if exists presence_batch_digits;
+drop table if exists presence_batch_binary;
+create table presence_batch_digits(n int primary key);
+insert into presence_batch_digits values(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table presence_batch_union(id int primary key, content text,
+fulltext index ft(content) with parser beng);
+insert into presence_batch_union
+select n, case when mod(n,11)=0 then null when mod(n,7)=0 then ''
+  when mod(n,5)=0 then 'the and a'
+  when mod(n,4)=0 then 'alpha alpha beta'
+  when mod(n,3)=0 then 'beta gamma'
+  when mod(n,2)=0 then 'gamma delta epsilon zeta theta lambda omega'
+  else 'alpha beta gamma delta epsilon zeta theta lambda omega' end
+from (select a.n*100+b.n*10+c.n as n from presence_batch_digits a
+cross join presence_batch_digits b cross join presence_batch_digits c) d
+where n<257;
+select count(*),sum(id),sum(id*id),bit_xor(id) from presence_batch_union
+where content like '%alpha%' or content like '%beta%' or content like '%gamma%';
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+160	20560	3515024	256
+select /*+ opt_param('ROWSETS_MAX_ROWS',0) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_batch_union where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+160	20560	3515024	256
+select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_batch_union where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+160	20560	3515024	256
+select /*+ opt_param('ROWSETS_MAX_ROWS',2) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_batch_union where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+160	20560	3515024	256
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_batch_union where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+160	20560	3515024	256
+select /*+ opt_param('ROWSETS_MAX_ROWS',32) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_batch_union where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+160	20560	3515024	256
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_batch_union where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+160	20560	3515024	256
+select count(*),sum(id),sum(id*id),bit_xor(id) from presence_batch_union
+where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+160	20560	3515024	256
+select count(*),sum(id) from presence_batch_union where match(content) against('alpha');
+count(*)	sum(id)
+93	11891
+select count(*),sum(id) from presence_batch_union where match(content) against('alpha nonexistentword');
+count(*)	sum(id)
+93	11891
+select count(*),sum(id) from presence_batch_union where match(content) against('alpha alpha beta beta gamma');
+count(*)	sum(id)
+160	20560
+select count(*),sum(id) from presence_batch_union
+where match(content) against('alpha beta gamma delta epsilon zeta theta lambda');
+count(*)	sum(id)
+160	20560
+select count(*),sum(id) from presence_batch_union
+where match(content) against('alpha beta gamma delta epsilon zeta theta lambda omega');
+count(*)	sum(id)
+160	20560
+select count(*) from presence_batch_union where match(content) against('nonexistentword');
+count(*)
+0
+select count(*) from presence_batch_union where match(content) against('');
+count(*)
+0
+select count(*) from presence_batch_union where match(content) against(null);
+count(*)
+0
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ id
+from presence_batch_union where match(content) against('alpha beta gamma') limit 0) v;
+count(*)
+0
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ id
+from presence_batch_union where match(content) against('alpha beta gamma') limit 1) v;
+count(*)
+1
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ id
+from presence_batch_union where match(content) against('alpha beta gamma') limit 8 offset 6) v;
+count(*)
+8
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',32) */ id
+from presence_batch_union where match(content) against('alpha beta gamma') limit 33 offset 31) v;
+count(*)
+33
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+from presence_batch_union where match(content) against('alpha beta gamma') limit 129 offset 127) v;
+count(*)
+33
+select count(*) from (select id from presence_batch_union
+where match(content) against('alpha beta gamma') limit 8 offset 257) v;
+count(*)
+0
+select count(*),sum(id) from presence_batch_union
+where match(content) against('alpha beta gamma') and mod(id,3)=0;
+count(*)	sum(id)
+53	6819
+select id from presence_batch_union where match(content) against('alpha beta gamma')
+order by id limit 8 offset 31;
+id
+52
+53
+54
+57
+58
+59
+61
+62
+select id,round(match(content) against('alpha beta gamma'),12) as score
+from presence_batch_union where match(content) against('alpha beta gamma')
+order by score desc,id limit 8;
+id	score
+4	1.317546560523
+8	1.317546560523
+12	1.317546560523
+16	1.317546560523
+24	1.317546560523
+32	1.317546560523
+36	1.317546560523
+48	1.317546560523
+select count(*),sum(id) from presence_batch_union
+where match(content) against('+alpha -gamma' in boolean mode);
+count(*)	sum(id)
+40	5200
+prepare presence_batch_stmt from 'select count(*) from (select id from presence_batch_union where match(content) against(?) limit ? offset ?) v';
+set @presence_words='alpha beta gamma',@presence_limit=8,@presence_offset=31;
+execute presence_batch_stmt using @presence_words,@presence_limit,@presence_offset;
+count(*)
+8
+set @presence_words='nonexistentword',@presence_limit=8,@presence_offset=0;
+execute presence_batch_stmt using @presence_words,@presence_limit,@presence_offset;
+count(*)
+0
+set @presence_words='alpha',@presence_limit=1000,@presence_offset=0;
+execute presence_batch_stmt using @presence_words,@presence_limit,@presence_offset;
+count(*)
+93
+deallocate prepare presence_batch_stmt;
+start transaction;
+update presence_batch_union set content='unrelatedword' where mod(id,13)=0;
+delete from presence_batch_union where mod(id,17)=0;
+insert into presence_batch_union values(300,'alpha beta'),(301,'gamma');
+select count(*),sum(id),sum(id*id) from presence_batch_union
+where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)
+141	18732	3296604
+select count(*),sum(id),sum(id*id) from presence_batch_union
+where content like '%alpha%' or content like '%beta%' or content like '%gamma%';
+count(*)	sum(id)	sum(id*id)
+141	18732	3296604
+rollback;
+select count(*),sum(id),sum(id*id) from presence_batch_union
+where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)
+160	20560	3515024
+create table presence_batch_binary(id varbinary(32) primary key, content text,
+fulltext index ft(content) with parser beng);
+insert into presence_batch_binary values
+(x'00','alpha'),(x'0000','alpha beta'),(x'0020','beta'),(x'20','gamma'),
+(x'2020','alpha gamma'),(x'6100','alpha beta gamma'),(x'6120','beta gamma'),
+(x'7F','alpha'),(x'80','beta'),(x'FF','gamma'),(x'FF00','alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',2) */ hex(id) from presence_batch_binary
+where match(content) against('alpha beta gamma') order by id;
+hex(id)
+00
+0000
+0020
+20
+2020
+6100
+6120
+7F
+80
+FF
+FF00
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ hex(id) from presence_batch_binary
+where match(content) against('alpha beta gamma') order by id;
+hex(id)
+00
+0000
+0020
+20
+2020
+6100
+6120
+7F
+80
+FF
+FF00
+select count(*) from (select id from presence_batch_binary
+where match(content) against('alpha beta gamma') limit 7 offset 6) v;
+count(*)
+5
+drop table presence_batch_binary;
+drop table presence_batch_union;
+drop table presence_batch_digits;

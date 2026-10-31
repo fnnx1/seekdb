@@ -1,0 +1,25 @@
+{
+  "diagnostic_only": true,
+  "binary": "/home/fbd2451702/fts-build-setup/seekdb-round7-candidate2",
+  "target": "fts_large_bench.docs (read only)",
+  "started_utc": "2026-10-30T10:39:51.331263+00:00",
+  "pid": 1968400,
+  "version": "5.7.25-OceanBase seekdb-v1.4.0.0",
+  "gdb_ready": true,
+  "matching_documents": 11000,
+  "sql_wall_sec": 2.85115,
+  "debugger_exit_code": 1,
+  "debugger": {
+    "diagnostic_only": true,
+    "pid": 1968400,
+    "elapsed_sec": 2.657,
+    "timed_out": false,
+    "forced_debugger_cleanup": false,
+    "gdb_exit_code": 0,
+    "detached_confirmed": true,
+    "proof": null,
+    "success": false
+  },
+  "success": false,
+  "finished_utc": "2026-10-30T10:39:54.351724+00:00"
+}

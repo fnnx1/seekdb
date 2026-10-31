@@ -1,0 +1,36 @@
+# Fixed-width and mixed-width binary IDs preserve presence/ranking semantics.
+--disable_warnings
+DROP TABLE IF EXISTS fts_fixed_ids;
+--enable_warnings
+CREATE TABLE fts_fixed_ids(id VARBINARY(32) PRIMARY KEY, content TEXT,
+  FULLTEXT INDEX ft(content) WITH PARSER beng);
+INSERT INTO fts_fixed_ids VALUES
+(X'','alpha'),(X'00','beta'),
+(X'0000000000000000','alpha beta'),(X'0000000000000001','gamma'),
+(X'00000000000000000000000000000000','alpha gamma'),
+(X'00000000000000000000000000000001','beta gamma'),
+(X'000000000000000000000000000000FF','alpha'),
+(X'00000000000000000000000000000100','beta'),
+(X'00000000000000010000000000000000','alpha beta gamma'),
+(X'7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF','alpha'),
+(X'80000000000000000000000000000000','beta'),
+(X'FFFFFFFFFFFFFFFF','gamma'),
+(X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF','alpha beta'),
+(X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00','alpha gamma'),
+(X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF20','beta gamma');
+SELECT HEX(id) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta gamma') ORDER BY id;
+SELECT /*+ opt_param('ROWSETS_MAX_ROWS',0) */ HEX(id) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta') ORDER BY id;
+SELECT /*+ opt_param('ROWSETS_MAX_ROWS',1) */ HEX(id) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta') ORDER BY id;
+SELECT /*+ opt_param('ROWSETS_MAX_ROWS',2) */ HEX(id) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta') ORDER BY id;
+SELECT COUNT(*) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha alpha beta');
+SELECT HEX(id),MATCH(content) AGAINST('alpha beta gamma') AS score FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta gamma') ORDER BY score DESC,id;
+SELECT HEX(id) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('+alpha -beta' IN BOOLEAN MODE) ORDER BY id;
+SELECT HEX(id) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 4 OFFSET 2;
+SELECT COUNT(*) FROM (SELECT id FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 4 OFFSET 2) s;
+START TRANSACTION;
+UPDATE fts_fixed_ids SET content='delta' WHERE id=X'00000000000000000000000000000000';
+DELETE FROM fts_fixed_ids WHERE id=X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF';
+SELECT HEX(id) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta') ORDER BY id;
+ROLLBACK;
+SELECT HEX(id) FROM fts_fixed_ids WHERE MATCH(content) AGAINST('alpha beta') ORDER BY id;
+DROP TABLE fts_fixed_ids;

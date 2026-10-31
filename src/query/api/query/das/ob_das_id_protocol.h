@@ -40,7 +40,27 @@ public:
 
   int hash(uint64_t &hash_val) const;
   const common::ObDatum &get_datum() const;
+  OB_INLINE const common::ObDatum &get_datum_fast() const { return datum_; }
   int from_datum(const common::ObDatum &datum);
+  OB_INLINE int from_datum_fast(const common::ObDatum &datum)
+  {
+    // Dense posting batches can inline the common fixed-width owned copy.
+    // Keep memmove semantics for views into this object's own ID buffer and
+    // retain the existing exported function for all other representations.
+    int ret = OB_SUCCESS;
+    if (!datum.is_null() && datum.len_ == sizeof(uint64_t)) {
+      MEMMOVE(buf_, datum.ptr_, sizeof(uint64_t));
+      datum_ = datum;
+      datum_.ptr_ = buf_;
+    } else if (!datum.is_null() && datum.len_ == 2 * sizeof(uint64_t)) {
+      MEMMOVE(buf_, datum.ptr_, 2 * sizeof(uint64_t));
+      datum_ = datum;
+      datum_.ptr_ = buf_;
+    } else {
+      ret = from_datum(datum);
+    }
+    return ret;
+  }
   int from_obj(const common::ObObj &obj);
 
   ObDocIdExt &operator=(const ObDocIdExt &other);

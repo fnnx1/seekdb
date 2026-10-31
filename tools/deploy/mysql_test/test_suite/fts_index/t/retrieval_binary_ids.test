@@ -1,0 +1,26 @@
+# Regression for binary document-ID comparisons in DAAT and BMW paths.
+--disable_warnings
+DROP TABLE IF EXISTS binary_ids;
+--enable_warnings
+CREATE TABLE binary_ids(id VARBINARY(32) PRIMARY KEY, content TEXT, FULLTEXT INDEX ft(content) WITH PARSER beng);
+INSERT INTO binary_ids VALUES
+(X'00','alpha beta'),(X'0000','alpha'),(X'0020','beta gamma'),
+(X'20','alpha beta gamma'),(X'2020','alpha alpha'),
+(X'61','alpha beta'),(X'6100','beta'),(X'6120','alpha gamma'),
+(X'6161','gamma alpha'),(X'7F','beta gamma'),
+(X'80','alpha beta gamma'),(X'FF','alpha gamma'),(X'FF00','beta alpha');
+SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') ORDER BY id;
+SELECT HEX(id), MATCH(content) AGAINST('alpha beta gamma') AS score FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') ORDER BY score DESC, id;
+SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 5;
+SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 3 OFFSET 4;
+SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 20;
+SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') > 0.15 ORDER BY id;
+SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('+alpha -gamma' IN BOOLEAN MODE) ORDER BY id;
+SELECT /*+ ROWSETS_MAX_ROWS(0) */ HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta') ORDER BY id;
+SELECT /*+ ROWSETS_MAX_ROWS(1) */ HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta') ORDER BY id;
+UPDATE binary_ids SET content='delta alpha' WHERE id=X'6100';
+DELETE FROM binary_ids WHERE id=X'20';
+INSERT INTO binary_ids VALUES(X'2000','alpha gamma');
+SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha gamma') LIMIT 7;
+SELECT HEX(id), MATCH(content) AGAINST('alpha gamma') AS score FROM binary_ids WHERE MATCH(content) AGAINST('alpha gamma') ORDER BY score DESC, id;
+DROP TABLE binary_ids;

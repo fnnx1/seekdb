@@ -1,0 +1,42 @@
+set names utf8mb4;
+drop table if exists tokenize_parameter_lifetime;
+create table tokenize_parameter_lifetime(id int primary key, content varchar(2048), parser_name varchar(16), properties varchar(1024));
+insert into tokenize_parameter_lifetime values
+(1, 'Alpha ALPHA beta beta gamma', 'beng', '[{"output":"all"}]'),
+(2, 'a ab abc abcd abcde abcdef', 'space', '[{"additional_args":[{"min_token_size":4},{"max_token_size":10}]},{"output":"all"}]'),
+(3, '中华人民共和国人民大会堂 数据库索引 中文分词', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]'),
+(4, '中华人民共和国人民大会堂 数据库索引 中文分词', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]'),
+(5, '一二三四五 六七八', 'ngram2', '[{"additional_args":[{"min_ngram_size":2},{"max_ngram_size":4}]},{"output":"all"}]'),
+(6, '', 'beng', '[]'),
+(7, null, 'space', '[{"output":"all"}]');
+select id, tokenize(content, parser_name, properties) as tokens from tokenize_parameter_lifetime order by id;
+id	tokens
+1	{"tokens": [{"gamma": 1}, {"alpha": 2}, {"beta": 2}], "doc_len": 5}
+2	{"tokens": [{"abcdef": 1}, {"abcde": 1}, {"abcd": 1}], "doc_len": 3}
+3	{"tokens": [{"人民大会堂": 1}, {"索引": 1}, {"分词": 1}, {"数据库": 1}, {"中文": 1}, {"中华人民共和国": 1}], "doc_len": 6}
+4	{"tokens": [{"数据": 1}, {"大会": 1}, {"人民大会堂": 1}, {"大会堂": 1}, {"共和国": 1}, {"人民大会": 1}, {"索引": 1}, {"人民共和国": 1}, {"中华人民": 1}, {"共和": 1}, {"分词": 1}, {"数据库": 1}, {"会堂": 1}, {"中文": 1}, {"中华": 1}, {"中华人民共和国": 1}, {"国人": 1}, {"华人": 1}, {"库": 1}, {"人民": 2}], "doc_len": 21}
+5	{"tokens": [{"二三四五": 1}, {"一二三": 1}, {"三四": 1}, {"三四五": 1}, {"七八": 1}, {"六七八": 1}, {"六七": 1}, {"二三": 1}, {"一二": 1}, {"四五": 1}, {"一二三四": 1}, {"二三四": 1}], "doc_len": 12}
+6	[]
+7	{"tokens": [], "doc_len": 0}
+select id, tokenize(content, parser_name, properties) as tokens from tokenize_parameter_lifetime order by id desc;
+id	tokens
+7	{"tokens": [], "doc_len": 0}
+6	[]
+5	{"tokens": [{"二三四五": 1}, {"一二三": 1}, {"三四": 1}, {"三四五": 1}, {"七八": 1}, {"六七八": 1}, {"六七": 1}, {"二三": 1}, {"一二": 1}, {"四五": 1}, {"一二三四": 1}, {"二三四": 1}], "doc_len": 12}
+4	{"tokens": [{"数据": 1}, {"大会": 1}, {"人民大会堂": 1}, {"大会堂": 1}, {"共和国": 1}, {"人民大会": 1}, {"索引": 1}, {"人民共和国": 1}, {"中华人民": 1}, {"共和": 1}, {"分词": 1}, {"数据库": 1}, {"会堂": 1}, {"中文": 1}, {"中华": 1}, {"中华人民共和国": 1}, {"国人": 1}, {"华人": 1}, {"库": 1}, {"人民": 2}], "doc_len": 21}
+3	{"tokens": [{"人民大会堂": 1}, {"索引": 1}, {"分词": 1}, {"数据库": 1}, {"中文": 1}, {"中华人民共和国": 1}], "doc_len": 6}
+2	{"tokens": [{"abcdef": 1}, {"abcde": 1}, {"abcd": 1}], "doc_len": 3}
+1	{"tokens": [{"gamma": 1}, {"alpha": 2}, {"beta": 2}], "doc_len": 5}
+select tokenize(concat(tokenize('Alpha beta gamma', 'beng'), ' extra'), 'beng', '[{"output":"all"}]') as nested_tokens;
+nested_tokens
+{"tokens": [{"beta": 1}, {"alpha": 1}, {"extra": 1}, {"gamma": 1}], "doc_len": 4}
+insert into tokenize_parameter_lifetime values (8, repeat('大小写 ASCII ascii 数据库索引 ', 50), 'ik', '[{"output":"all"}]');
+select tokenize(content, parser_name, properties) as repeated_tokens from tokenize_parameter_lifetime where id=8;
+repeated_tokens
+{"tokens": [{"据": 50}, {"大小写": 50}, {"引": 50}, {"数据库": 50}, {"索": 50}, {"ascii": 100}, {"库": 50}, {"大": 50}, {"数": 50}, {"索引": 50}, {"小": 50}, {"写": 50}], "doc_len": 650}
+select tokenize('one two three', 'space', '[{"additional_args":[{"min_token_size":11},{"max_token_size":10}]}]');
+ERROR HY000: Incorrect arguments to the max_token_size must be equal to or greater than min_token_size
+select tokenize('one two three', 'space', '[{"additional_args":[{"min_token_size":3},{"max_token_size":10}]},{"output":"all"}]') as after_error;
+after_error
+{"tokens": [{"two": 1}, {"three": 1}, {"one": 1}], "doc_len": 3}
+drop table tokenize_parameter_lifetime;

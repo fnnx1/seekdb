@@ -1,0 +1,21 @@
+from pathlib import Path
+import re, json, statistics, sys
+root=Path(__file__).resolve().parent
+prefix=sys.argv[1]
+names=['build_ik_all_sec','build_ik_content_sec','build_beng_en_sec','tokenize_ik_avg_ms','tokenize_beng_avg_ms','query_cn_avg_ms','query_beng_avg_ms','query_mixed_avg_ms','query_limit_avg_ms']
+data={}
+for label in ['old1','new1','new2','old2']:
+ text=(root/'validation-20261030'/f'{prefix}-{label}-benchmark.txt').read_text()
+ values=dict(re.findall(r'^\s*([a-z0-9_]+):\s*([0-9.]+)\s*$',text,re.M))
+ data[label]={k:float(v) for k,v in values.items()}
+ for field,expect in [('query_cn_hits',8001),('query_beng_hits',11000),('query_mixed_hits',7332),('query_limit_hits',20)]:
+  assert data[label][field]==expect,(label,field,data[label][field])
+results={}
+for key in names:
+ old=statistics.mean(data[label][key] for label in ['old1','old2'])
+ new=statistics.mean(data[label][key] for label in ['new1','new2'])
+ results[key]={'baseline':old,'candidate':new,'relative_improvement':1-new/old}
+categories={name:statistics.mean(results[key]['relative_improvement'] for key in keys) for name,keys in [('build',names[:3]),('tokenize',names[3:5]),('query',names[5:])]}
+output={'reference':'89af6b804 baseline; local paired comparison, not competition scoring baseline','samples':data,'metrics':results,'category_improvements':categories,'mean_improvement_vs_previous_candidate':statistics.mean(categories.values())}
+(root/'validation-round8'/f'{prefix}-comparison.json').write_text(json.dumps(output,indent=2))
+print(json.dumps(output,indent=2))

@@ -382,7 +382,28 @@ int ObFTRangeDict::find_first_char_range(const ObString &single_word, ObIFTDict 
 {
   int ret = OB_SUCCESS;
   bool found = false;
-  for (int i = 0; OB_SUCC(ret) && !found && i < range_dicts_.size(); ++i) {
+  if (ordered_ranges_) {
+    int64_t lo = 0;
+    int64_t hi = range_dicts_.size();
+    while (lo < hi) {
+      const int64_t mid = lo + (hi - lo) / 2;
+      if (ObCharset::strcmp(ObCollationType::CS_TYPE_UTF8MB4_BIN,
+                            range_dicts_[mid].end_.get_word(), single_word) < 0) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    if (lo < range_dicts_.size()
+        && ObCharset::strcmp(ObCollationType::CS_TYPE_UTF8MB4_BIN,
+                              range_dicts_[lo].start_.get_word(), single_word) <= 0) {
+      dict = range_dicts_[lo].dict_;
+      found = true;
+    }
+  }
+  // Keep first-match behavior for any externally constructed cache whose
+  // ranges overlap or arrive in an order unsuitable for binary search.
+  for (int i = 0; !ordered_ranges_ && OB_SUCC(ret) && !found && i < range_dicts_.size(); ++i) {
     if (ObCharset::strcmp(ObCollationType::CS_TYPE_UTF8MB4_BIN,
                           range_dicts_[i].start_.get_word(),
                           single_word)
@@ -405,6 +426,7 @@ int ObFTRangeDict::find_first_char_range(const ObString &single_word, ObIFTDict 
 int ObFTRangeDict::build_dict_from_cache(const ObFTCacheRangeContainer &range_container)
 {
   int ret = OB_SUCCESS;
+  ordered_ranges_ = false;
   for (ObList<ObFTCacheRangeHandle *, ObIAllocator>::const_iterator iter = range_container.get_handles().begin();
        OB_SUCC(ret) && iter != range_container.get_handles().end();
        iter++) {
@@ -419,6 +441,19 @@ int ObFTRangeDict::build_dict_from_cache(const ObFTCacheRangeContainer &range_co
       range.end_ = dat->end_word_;
       range.dict_ = dict;
       if (OB_FAIL(range_dicts_.push_back(range))) {
+      }
+    }
+  }
+  if (OB_SUCC(ret)) {
+    ordered_ranges_ = true;
+    for (int64_t i = 0; ordered_ranges_ && i < range_dicts_.size(); ++i) {
+      ordered_ranges_ = ObCharset::strcmp(ObCollationType::CS_TYPE_UTF8MB4_BIN,
+                                           range_dicts_[i].start_.get_word(),
+                                           range_dicts_[i].end_.get_word()) <= 0;
+      if (ordered_ranges_ && i > 0) {
+        ordered_ranges_ = ObCharset::strcmp(ObCollationType::CS_TYPE_UTF8MB4_BIN,
+                                             range_dicts_[i - 1].end_.get_word(),
+                                             range_dicts_[i].start_.get_word()) < 0;
       }
     }
   }

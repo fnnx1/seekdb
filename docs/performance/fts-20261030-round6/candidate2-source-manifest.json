@@ -1,0 +1,78 @@
+{
+  "src/query/api/query/das/ob_das_id_protocol.h": {
+    "before": "a7df2e0bae6c5cdf7c153a5e699c87b80176f3137f419767ead4557c74fd3356",
+    "after": "efffb93b0a9fb9939603e5fac8318d83c06a9eed2804e305058f7c2f9de785b6"
+  },
+  "src/sql/engine/sort/ob_sort_op_impl.cpp": {
+    "before": "9cc747e92230c6db24ca230f993447ee0ae01fe090b85064bb9a4c0281e36e3f",
+    "after": "330c4e82ccdc0555c19bb82197ae6de2e73f924ca780b64050291182e24ffa6a"
+  },
+  "src/storage/fts/dict/ob_ft_cache_dict.cpp": {
+    "before": "70774328da3a6f4ea5b16633e3fa0028be10f136513a813122e2b4b845553dad",
+    "after": "70774328da3a6f4ea5b16633e3fa0028be10f136513a813122e2b4b845553dad"
+  },
+  "src/storage/fts/dict/ob_ft_cache_dict.h": {
+    "before": "ed07510b042371b35b9e7463c552f0f4b6f95cc2e8df7b4c1620d17c1331f0ad",
+    "after": "ed07510b042371b35b9e7463c552f0f4b6f95cc2e8df7b4c1620d17c1331f0ad"
+  },
+  "src/storage/fts/dict/ob_ft_dat_dict.cpp": {
+    "before": "ee5e4b99924e3fd22e2e4a9712010cae45323cf10af5291290ee4100c9a59ed6",
+    "after": "ee5e4b99924e3fd22e2e4a9712010cae45323cf10af5291290ee4100c9a59ed6"
+  },
+  "src/storage/fts/dict/ob_ft_dat_dict.h": {
+    "before": "db8f2df46ff03c361be357cd07445251151b4316d4788ab0b4fc06c0fb798603",
+    "after": "db8f2df46ff03c361be357cd07445251151b4316d4788ab0b4fc06c0fb798603"
+  },
+  "src/storage/fts/dict/ob_ft_dict.h": {
+    "before": "96668986f388f785209bb7bf6aa89687c438126a01a17225aaa64bc3a3d5a2e8",
+    "after": "96668986f388f785209bb7bf6aa89687c438126a01a17225aaa64bc3a3d5a2e8"
+  },
+  "src/storage/fts/dict/ob_ft_range_dict.cpp": {
+    "before": "96a610d6c0b5e96693fd882919fd25733cf840345232e2eeba0bbedc8c272cf8",
+    "after": "96a610d6c0b5e96693fd882919fd25733cf840345232e2eeba0bbedc8c272cf8"
+  },
+  "src/storage/fts/dict/ob_ft_range_dict.h": {
+    "before": "5d7e6ece6483bc18e50c7b4b7eb8b20a0ec0cfba5cd4d1a9da0bf25630a86820",
+    "after": "5d7e6ece6483bc18e50c7b4b7eb8b20a0ec0cfba5cd4d1a9da0bf25630a86820"
+  },
+  "src/storage/fts/ik/ob_ik_cjk_processor.cpp": {
+    "before": "747c7921e388517df192ba1b470b8dc654691594e8713fac0ee821d6bf722051",
+    "after": "747c7921e388517df192ba1b470b8dc654691594e8713fac0ee821d6bf722051"
+  },
+  "src/storage/retrieval/ob_text_daat_iter.cpp": {
+    "before": "ffb7183d48bbaa5e9b6b79834566d58538fa61e56b334a7d13ded1722c5802bd",
+    "after": "c38b4ef4c001b4c92acfcb34b4f5860ec8686756fbd6a05cd8155a4339ec69fe"
+  },
+  "src/storage/retrieval/ob_text_daat_iter.h": {
+    "before": "8ea6b25b6cff3b018279ae178fdb3866b3116c081298444255bb02f4959c03c8",
+    "after": "fe1a36be726d9c7d7c98681327687bf6be1ffcf1e759f6c28e4476afa95939e0"
+  },
+  "src/storage/retrieval/ob_text_retrieval_token_iter.cpp": {
+    "before": "604206317bf967f9f7188b5a8960b4c3bccf6c4bfba0d295b117ae491a31a75d",
+    "after": "8898612dfc9c48b86876ab2e43eff83ed809d2df8b086575c61c1412538719aa"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/r/mysql/presence_sorted_runs.result": {
+    "before": null,
+    "after": "28d4695d91af1c54c01f0d6453a48bb1fd36bb133ef417d11413fca32a918fd2"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/r/mysql/sort_fixed_width_binary.result": {
+    "before": null,
+    "after": "98c3e7bc6b49f20537f1ed19700424e217d22bd73542a346ece1b1b0fc730b82"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/r/mysql/tokenize_character_lookup.result": {
+    "before": null,
+    "after": "691a6e856347e4d54fd08caf4016e469883f0accc473ba073f05965f01ffbe88"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/t/presence_sorted_runs.test": {
+    "before": null,
+    "after": "2da33f18a97094a346b87af98385d64c21cddf12616d3087b742f6c17b223413"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/t/sort_fixed_width_binary.test": {
+    "before": null,
+    "after": "9525b82b31804e0d61f57ff5a6f1c200f297f902d3c785de8d0a2544455cb8d2"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/t/tokenize_character_lookup.test": {
+    "before": null,
+    "after": "d3c2eba96d339816af88828304e0cc93ce556e272fd141a1556010b576399bdb"
+  }
+}

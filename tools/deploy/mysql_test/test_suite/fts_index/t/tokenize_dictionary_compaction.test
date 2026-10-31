@@ -1,0 +1,12 @@
+# Character-code compaction must preserve dictionary traversal and token order.
+# Exercise long shared prefixes, different ranges, missing characters, mixed
+# UTF-8 lengths, punctuation and both IK output modes.
+set names utf8mb4;
+select tokenize('一丝不苟一个中国一个中心 一丝不苟 华中科技大学 南京市长江大桥 研究生命起源 足球运动员 黑龙江省 龟兔赛跑', 'ik');
+select tokenize('一丝不苟一个中国一个中心 一丝不苟 华中科技大学 南京市长江大桥 研究生命起源 足球运动员 黑龙江省 龟兔赛跑', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]');
+select tokenize('研究研究生研究生物研究生命起源 南京南京市南京市长江大桥 长江长江大桥', 'ik', '[{"output":"all"}]');
+select tokenize('ABC abc A1 a1 中华人民共和国 中华人民共和國 日本語 한국어 中文𠮷𠀀😀éÉ Ωω 一二三十百千万 12.50kg', 'ik');
+select tokenize('ABC abc A1 a1 中华人民共和国 中华人民共和國 日本語 한국어 中文𠮷𠀀😀éÉ Ωω 一二三十百千万 12.50kg', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]');
+select tokenize(convert(concat('南京市', char(0), '长江大桥', char(9), '华中科技大学', char(10), '研究生命') using utf8mb4), 'ik', '[{"output":"all"}]');
+select tokenize('!@#$%^&*()[]{}，。！？\"\'😀𠮷𠀀', 'ik');
+select tokenize('', 'ik', '[{"output":"all"}]');

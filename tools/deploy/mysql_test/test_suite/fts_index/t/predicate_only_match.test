@@ -1,0 +1,59 @@
+# description: Natural-language predicate-only MATCH preserves scored queries.
+--disable_warnings
+drop table if exists fts_predicate_only;
+--enable_warnings
+create table fts_predicate_only(id int primary key, content text,
+  fulltext index ft(content) with parser beng);
+insert into fts_predicate_only values
+  (1,'alpha beta gamma'),(2,'alpha alpha delta'),(3,'beta epsilon'),
+  (4,'gamma delta'),(5,null),(6,''),(7,'the and a'),(8,'ALPHA beta'),
+  (9,'omega theta'),(10,'delta epsilon');
+select id from fts_predicate_only where match(content) against('alpha beta') order by id;
+select count(*) as hits from fts_predicate_only where match(content) against('alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS', 0) */ id from fts_predicate_only
+  where match(content) against('alpha beta') order by id;
+select /*+ opt_param('ROWSETS_MAX_ROWS', 1) */ id from fts_predicate_only
+  where match(content) against('alpha beta') order by id;
+select /*+ opt_param('ROWSETS_MAX_ROWS', 32) */ id from fts_predicate_only
+  where match(content) against('alpha beta') order by id;
+select id from fts_predicate_only where match(content) against('alpha beta') > 0 order by id;
+select id from fts_predicate_only where match(content) against('alpha alpha beta') order by id;
+select id from fts_predicate_only where match(content) against('alpha beta') and id > 2 order by id;
+select id from fts_predicate_only where match(content) against('alpha beta') order by id limit 2 offset 1;
+select count(*) as limited_hits from
+  (select id from fts_predicate_only where match(content) against('alpha beta') limit 2) t;
+select id, round(match(content) against('alpha beta'), 6) as score
+  from fts_predicate_only where match(content) against('alpha beta') order by id;
+select id from fts_predicate_only where match(content) against('alpha beta')
+  order by match(content) against('alpha beta') desc, id limit 3;
+select id from fts_predicate_only where match(content) against('alpha beta') > 0.5 order by id;
+select count(*) as no_hits from fts_predicate_only where match(content) against('nonexistentword');
+select count(*) as empty_hits from fts_predicate_only where match(content) against('');
+select count(*) as null_hits from fts_predicate_only where match(content) against(null);
+select id from fts_predicate_only where match(content) against('+alpha -delta' in boolean mode) order by id;
+select id from fts_predicate_only where match(content) against('alpha beta')
+  or match(content) against('gamma delta') > 0.5 order by id;
+select id from fts_predicate_only force index(primary)
+  where id > 1 and match(content) against('alpha beta') order by id;
+prepare fts_threshold from 'select id from fts_predicate_only where match(content) against(?) > ? order by id';
+set @fts_words='alpha beta', @fts_threshold=0;
+execute fts_threshold using @fts_words, @fts_threshold;
+set @fts_threshold=0.5;
+execute fts_threshold using @fts_words, @fts_threshold;
+deallocate prepare fts_threshold;
+prepare fts_presence from 'select id from fts_predicate_only where match(content) against(?) order by id';
+set @fts_words='alpha beta';
+execute fts_presence using @fts_words;
+set @fts_words='nonexistentword';
+execute fts_presence using @fts_words;
+set @fts_words=null;
+execute fts_presence using @fts_words;
+set @fts_words='delta';
+execute fts_presence using @fts_words;
+deallocate prepare fts_presence;
+update fts_predicate_only set content='omega' where id=1;
+delete from fts_predicate_only where id=2;
+select id from fts_predicate_only where match(content) against('alpha beta') order by id;
+insert into fts_predicate_only values(11,'term000 term001'),(12,'term299 term000');
+select id from fts_predicate_only where match(content) against('term000 term001 term002 term003 term004 term005 term006 term007 term008 term009 term010 term011 term012 term013 term014 term015 term016 term017 term018 term019 term020 term021 term022 term023 term024 term025 term026 term027 term028 term029 term030 term031 term032 term033 term034 term035 term036 term037 term038 term039 term040 term041 term042 term043 term044 term045 term046 term047 term048 term049 term050 term051 term052 term053 term054 term055 term056 term057 term058 term059 term060 term061 term062 term063 term064 term065 term066 term067 term068 term069 term070 term071 term072 term073 term074 term075 term076 term077 term078 term079 term080 term081 term082 term083 term084 term085 term086 term087 term088 term089 term090 term091 term092 term093 term094 term095 term096 term097 term098 term099 term100 term101 term102 term103 term104 term105 term106 term107 term108 term109 term110 term111 term112 term113 term114 term115 term116 term117 term118 term119 term120 term121 term122 term123 term124 term125 term126 term127 term128 term129 term130 term131 term132 term133 term134 term135 term136 term137 term138 term139 term140 term141 term142 term143 term144 term145 term146 term147 term148 term149 term150 term151 term152 term153 term154 term155 term156 term157 term158 term159 term160 term161 term162 term163 term164 term165 term166 term167 term168 term169 term170 term171 term172 term173 term174 term175 term176 term177 term178 term179 term180 term181 term182 term183 term184 term185 term186 term187 term188 term189 term190 term191 term192 term193 term194 term195 term196 term197 term198 term199 term200 term201 term202 term203 term204 term205 term206 term207 term208 term209 term210 term211 term212 term213 term214 term215 term216 term217 term218 term219 term220 term221 term222 term223 term224 term225 term226 term227 term228 term229 term230 term231 term232 term233 term234 term235 term236 term237 term238 term239 term240 term241 term242 term243 term244 term245 term246 term247 term248 term249 term250 term251 term252 term253 term254 term255 term256 term257 term258 term259 term260 term261 term262 term263 term264 term265 term266 term267 term268 term269 term270 term271 term272 term273 term274 term275 term276 term277 term278 term279 term280 term281 term282 term283 term284 term285 term286 term287 term288 term289 term290 term291 term292 term293 term294 term295 term296 term297 term298 term299') order by id;
+drop table fts_predicate_only;

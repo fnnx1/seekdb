@@ -1,0 +1,147 @@
+{
+  "reference_commit": "55378155e0fa04fe33d77e68482eec548a73eae3",
+  "candidate_binary_sha256": "ab55406d96e2316662a4d52ca1b06fdb0d1ace557fc1cbf4421acd8d09142782",
+  "source_manifest_verified_files": 26,
+  "source_files": {
+    "src/sql/code_generator/ob_static_engine_cg.cpp": {
+      "before": "c505e4010a2c2e2983d8c4508a1892ea2e50f4a915a3e70b8baed0a4262370e8",
+      "after": "77fa85bfbcd874021d683e904a65515fc04d8fd2565988dbe7be94e4c18c654c"
+    },
+    "src/sql/das/ob_das_domain_utils.h": {
+      "before": "82287f8a5362cc9f3014c4cc586aa362f2c49f74ff5664bba700b066d49b38e9",
+      "after": "1f7564dd1adb2881c893ea68c8e46355028c66a434e535c5a357db0f50110650"
+    },
+    "src/sql/das/ob_das_ir_define.cpp": {
+      "before": "8ae2fa86ca7857c6ecf703ba10617d3193ca31881be0049daa954f2ea2f5ba95",
+      "after": "d57b9970c76279b7ba0799a1e0b5e84569525cf50952dd0f63fcec9fdc12d6ee"
+    },
+    "src/sql/engine/sort/ob_sort_op_impl.cpp": {
+      "before": "169cacac789c625d04746ca4c51138e424a8146f8282c5f145616a71082d126f",
+      "after": "9cc747e92230c6db24ca230f993447ee0ae01fe090b85064bb9a4c0281e36e3f"
+    },
+    "src/sql/engine/sort/ob_sort_op_impl.h": {
+      "before": "542b0a5b65048fe0af4d3bd83f4c3d741a06d7098e841d00050ca17cf1aa7749",
+      "after": "2b34be20e1748f8d52ca181699e55c43123f633d2a360048f5787f5960ae9f0c"
+    },
+    "src/sql/engine/table/ob_table_scan_op.cpp": {
+      "before": "80f7728c348b23ac8adddda18fa4dfae57b229d538700dc6795275bb699c15b1",
+      "after": "a2a46c6c2d930c4a92034454fdab69164ff57dffd005e17dc61e18ace026dea8"
+    },
+    "src/sql/engine/table/ob_table_scan_op.h": {
+      "before": "15543386319606d535eb58c3a85d225af8a81f1bce65eab5c16a74afbd8a09c7",
+      "after": "0a954ba442612b4db2cebad4de6a5201f1070327f47ecc48d03e798583e9a111"
+    },
+    "src/storage/blocksstable/encoding/ob_string_diff_decoder.cpp": {
+      "before": "026f5a713ebb2676ee0eca07279b6be87636e58b08ea04ce45cab9db87b92b47",
+      "after": "1bb01662bca983383c09261fee510c657f3221e4406d77e0e8a1b153810505e6"
+    },
+    "src/storage/fts/dict/ob_ft_dat_dict.cpp": {
+      "before": "b4febc4b1dfc5c2ea7eee2bc72d024b20ae628b9f18ad0eb945b86b45e00ede4",
+      "after": "ee5e4b99924e3fd22e2e4a9712010cae45323cf10af5291290ee4100c9a59ed6"
+    },
+    "src/storage/fts/dict/ob_ft_dat_dict.h": {
+      "before": "94ef2e18fa26472dda55526a689502a1a0465024846a719248312cde35988a6d",
+      "after": "db8f2df46ff03c361be357cd07445251151b4316d4788ab0b4fc06c0fb798603"
+    },
+    "src/storage/fts/dict/ob_gen_dic_loader.cpp": {
+      "before": "e652616500baea120c1b1fd2dde738147a464c1837ca3923120593e5195017ef",
+      "after": "70783aae8184d49bead0f03864b2344130bc1ebdfaded06c1b5bf281f0b7403e"
+    },
+    "src/storage/retrieval/ob_sparse_retrieval_util.h": {
+      "before": "47e4dd597aab0f87e8b778e62ff342a37f1240679576c584ceb229537854571b",
+      "after": "132e69169499d3b921883d33a46839bcdc9b84576136417ebcd47a8cec051092"
+    },
+    "src/storage/retrieval/ob_text_daat_iter.cpp": {
+      "before": "a01938c2890245c76769692419364f9486f3040fd9f03bab830b995903d5f4f5",
+      "after": "ffb7183d48bbaa5e9b6b79834566d58538fa61e56b334a7d13ded1722c5802bd"
+    },
+    "src/storage/retrieval/ob_text_retrieval_token_iter.cpp": {
+      "before": "30304b5d48a47651c683041c069607dae0c1079e8df2ba07403de687c1d36e7b",
+      "after": "604206317bf967f9f7188b5a8960b4c3bccf6c4bfba0d295b117ae491a31a75d"
+    }
+  },
+  "differential_sql_statements": {
+    "retrieval_binary_ids": 18,
+    "predicate_only_match": 44,
+    "document_local_tokens": 26,
+    "retrieval_sort_keys": 24,
+    "sort_ascii_collation": 14,
+    "cardinality_only_match": 39,
+    "presence_batch_union": 58,
+    "encoded_sort_collation": 14,
+    "retrieval_fixed_width_ids": 19,
+    "fts_build_batch_boundaries": 49,
+    "string_diff_batch_payloads": 28,
+    "tokenize_dictionary_compaction": 9,
+    "fts_build_sstable_source": 22,
+    "sort_compare_cache": 14
+  },
+  "native_mysqltest_cases": 17,
+  "exact_score_rows": 27665,
+  "bmw_comparisons": 88,
+  "bmw_rows": 155947,
+  "bmw_unchanged_unsupported_cases": 4,
+  "concurrent_tokenize": {
+    "sessions": 8,
+    "checked": 3120,
+    "status": "PASS",
+    "per_session": [
+      390,
+      390,
+      390,
+      390,
+      390,
+      390,
+      390,
+      390
+    ]
+  },
+  "differential_tokenize_outcomes": 720,
+  "cold_loader_test": {
+    "binary": "candidate2",
+    "outcomes": 328,
+    "reference_equal": true,
+    "note": "Loader and dictionary sources are unchanged in candidate3."
+  },
+  "batch_proof": {
+    "diagnostic_only": true,
+    "binary": "/home/fbd2451702/fts-build-setup/seekdb-round5-candidate3",
+    "target": "`fts_build_round5`.`gdb_20261030_153645_3e336cd7`",
+    "started_utc": "2026-10-30T07:36:45.794148+00:00",
+    "pid": 1644712,
+    "fixture_rows": 66,
+    "version": "5.7.25-OceanBase seekdb-v1.4.0.0",
+    "gdb_ready": true,
+    "diagnostic_build_sec": 2.07313,
+    "matching_documents": 64,
+    "sql_wall_sec": 7.114462,
+    "debugger_exit_code": 0,
+    "debugger": {
+      "diagnostic_only": true,
+      "pid": 1644712,
+      "elapsed_sec": 5.892,
+      "timed_out": false,
+      "forced_debugger_cleanup": false,
+      "gdb_exit_code": 0,
+      "detached_confirmed": true,
+      "proof": {
+        "batch_size": 16,
+        "frame": "oceanbase::sql::ObTableScanOp::inner_get_next_fts_index_batch",
+        "source_line": "ob_table_scan_op.cpp:3714",
+        "pid": 1644712
+      },
+      "success": true
+    },
+    "success": true,
+    "finished_utc": "2026-10-30T07:36:52.981643+00:00"
+  },
+  "official_benchmark_files_changed": [],
+  "evidence_hashes": {
+    "candidate3-build.log": "e79c37ffbeea67285d1732b5911b63cd9f09ba2b3270ea34734b578cfb55d24f",
+    "candidate3-validation.log": "4607e762ad79754c7a3a418e0a955c26d921ec0ccc1516d21565892a33cc1e93",
+    "candidate3-exact.json": "d04241ef5dc9ed7dc95ebc0355fcae9293d9572b892a8aefc4b4c39318940efc",
+    "candidate3-bmw.json": "315d7aa1c9fba93c0778879f5f2519e9a0d59a7678519c4b4d815667a84b2c49",
+    "candidate3-tokenize.json": "c91e989cc7feedc8f379e16bedc56d24e231e93c55dd1347117b28e1da3231b9",
+    "candidate2-cold-loader.json": "a0b180cba6b5897e202604927ad2314556d2a6657eb2d00c7b7b557f24d6b912"
+  }
+}

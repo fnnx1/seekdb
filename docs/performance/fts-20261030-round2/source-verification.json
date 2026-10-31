@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "verified_source_count": 17,
+  "sha256": {
+    "src/data_plane/api/data_plane/fts/ob_fts_struct.h": "b012f7b26a28ff59b29c8af2d0b2f3fe93d7a8db1241f6785cfda43076b21598",
+    "src/observer/composition/retrieval/ob_das_legacy_tr_merge_iter.cpp": "e22b91594527bb01808ead384c31633a53641448b1af36de9cf960efec774ba1",
+    "src/sql/das/iter/ob_das_iter_utils.cpp": "a56d2b728913dfbc44d5e60bd09ca88941521e1f63cee58480bedc83d5e35915",
+    "src/sql/das/iter/ob_das_text_retrieval_merge_iter.cpp": "c226def80c2874e2863832a83c78b0ab4d92455c314e9588de697381db330bec",
+    "src/sql/engine/sort/ob_sort_op_impl.cpp": "1b0a1350426a296fa16bf5156f987b557d0860db139ecc01300ed2b01111eefd",
+    "src/sql/optimizer/ob_join_order.cpp": "d0285aa29d28c7e50c2e15d580896b45b8a9069cc072a77ff2480b9290250b18",
+    "src/sql/optimizer/ob_log_plan.cpp": "183b495f1f77f4f7a1a6e504cad4eef52b5cc76eb82e152c78f281ace574c370",
+    "src/storage/fts/dict/ob_ft_dat_dict.cpp": "0fb8cf0e03f176fbc808f8cffd0784acfc1d0e60e7b2261db736d7ed986b27a5",
+    "src/storage/fts/ob_fts_stop_word.cpp": "56eaec0054a9d80f99cca3275d7ff9cf33276df18b7a7b14349039f0da736275",
+    "src/storage/retrieval/ob_sparse_bmw_iter.cpp": "4828a0250e717a11f0fb299c3587c54142cffaf98f8f430f7fad68ff0fc7f45c",
+    "src/storage/retrieval/ob_sparse_daat_iter.cpp": "fb7b303deaff0c3e8bf68b35616816266fb613207203eb5029ba6a32b460c263",
+    "src/storage/retrieval/ob_sparse_retrieval_util.h": "f99bd09e2b4839cd564977cdc3c39dfcc5300f23ef36b610a49d4235e03cf353",
+    "src/storage/retrieval/ob_sparse_taat_iter.cpp": "b898e6d207ce5c3aba5cde38ffa349e7be2f6dca92195da46e228bfbc61e752e",
+    "src/storage/retrieval/ob_text_daat_iter.cpp": "808c22e9fec928da1971706c184c6cdaf95b70e8440672752f3d7125303335c0",
+    "src/storage/retrieval/ob_text_daat_iter.h": "94ede77391336375dab1c8b3a87a91993699a8b8fe31ed2c2c4f39a673a9889d",
+    "src/storage/retrieval/ob_text_retrieval_token_iter.cpp": "73a4b4042548dafeb9b289a9f1d7d2b8e80ab65f5dbb236959a3774714ea88bc",
+    "src/storage/retrieval/ob_text_taat_iter.cpp": "e698c15a410f066eb6b466d6212b5e3ce8c8575cec8bf84495bc6bd7b19f1778"
+  }
+}

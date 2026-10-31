@@ -137,6 +137,12 @@ public:
   ObFTParserProperty();
   ~ObFTParserProperty() = default;
   int parse_for_parser_helper(const ObFTParser &parser, const ObString &json_str);
+  /**
+   * Fill the property with the built-in defaults of one parser.  Used when no parser
+   * property string was supplied, so that the JSON object/parse/serialize round trip
+   * can be skipped entirely (the defaults only depend on the parser name).
+   */
+  int parse_default_for_parser(const ObFTParser &parser);
 
   bool is_equal(const ObFTParserProperty &other) const
   {

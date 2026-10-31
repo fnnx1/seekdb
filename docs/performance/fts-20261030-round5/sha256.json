@@ -1,0 +1,16 @@
+{
+  "batch-proof.json": "9c58a6cc413d9fc34e8878d4f62bba2af70583ea1de2c9180d1e7945174c7b83",
+  "candidate3-source-manifest.json": "922027233cf920c80de7d806f88ceca1f47fe398c42c6ca30c7e53310461938b",
+  "platform-round4.json": "59a30507949d8bf8da49c56f3a94c147dbfdd8829bb51bb28d26460238d4c43f",
+  "round5-c2-abba-comparison.json": "f6006286da019884beef52979a4e5b47732af81f7e0e69674ce41b983611f2d9",
+  "round5-c2-abba-new1-benchmark.txt": "548f49a8e7252e1892a4f843588c36b978766f0c46b916a3823a0df715026ed4",
+  "round5-c2-abba-new2-benchmark.txt": "8b9194f7de5ea59a604e1cecdea327cab0e4bc21b3d378e02d6f1ebc8bcc5876",
+  "round5-c2-abba-old1-benchmark.txt": "2d590890b599de1d3f165c48504297689e234a00caad1111055b572110ac9c05",
+  "round5-c2-abba-old2-benchmark.txt": "ac25dca5ca0008b10fc3cb52c8d1b024da38b56906436b821d83bc076b34cdf0",
+  "round5-final-comparison.json": "9fdb073085011c8da9f5435b1de880e34bd57ce3b781559765708915658fc084",
+  "round5-final-new1-benchmark.txt": "5eda996ddc240280433ec9e64b2d2490102ad62e7e84603a8c1670e5db565502",
+  "round5-final-new2-benchmark.txt": "f3e950e0333809cac938f904e9755c1e8b5ff003c18b4003e74e494674d59512",
+  "round5-final-old1-benchmark.txt": "05392111279e74812ad9502ceaa4bbe2ba25c9ac40167d55481756b606f4d0f1",
+  "round5-final-old2-benchmark.txt": "7aa23d24b01ba46b977ca5004382812354477c7ad5c2ea4e69d98f93250f68ee",
+  "validation-summary.json": "d792a8270320ce15fb5fcc4acfeff7f0428a596d5d06521d86e609b53dc9cd35"
+}

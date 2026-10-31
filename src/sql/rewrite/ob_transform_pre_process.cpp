@@ -179,7 +179,7 @@ int ObTransformPreProcess::transform_one_stmt(common::ObIArray<ObParentDMLStmt> 
     }
     if (OB_SUCC(ret)) {
       if (stmt->get_match_exprs().count() > 0 &&
-          OB_FAIL(preserve_order_for_fulltext_search(stmt, is_happened))) {
+          OB_FAIL(preserve_order_for_fulltext_search(parent_stmts, stmt, is_happened))) {
       } else {
         trans_happened |= is_happened;
       }
@@ -3788,9 +3788,70 @@ int ObTransformPreProcess::do_flatten_conditions(ObDMLStmt *stmt, ObIArray<ObRaw
   return ret;
 }
 
-// full-text index queries on a single base table are processed with order preservation. 
+// A COUNT(*) consumer observes only the number of rows produced by its view.
+// An implicit fulltext ranking cannot change that number, including when the
+// view has LIMIT/OFFSET. Do not remove user ORDER BY or apply this rule to a
+// consumer that observes values (COUNT(column), filters, joins, etc.). Keep the
+// eligibility deliberately narrow so score thresholds and side effects retain
+// their original evaluation path.
+static bool is_cardinality_only_fulltext_view(
+    const ObIArray<ObParentDMLStmt> &parent_stmts, const ObDMLStmt &stmt)
+{
+  bool eligible = false;
+  const ObDMLStmt *parent = parent_stmts.empty() ? nullptr
+      : parent_stmts.at(parent_stmts.count() - 1).stmt_;
+  if (nullptr != parent && parent->is_select_stmt() && stmt.is_select_stmt()) {
+    const ObSelectStmt &outer = static_cast<const ObSelectStmt &>(*parent);
+    const ObSelectStmt &inner = static_cast<const ObSelectStmt &>(stmt);
+    const TableItem *view = outer.get_table_items().count() == 1
+        ? outer.get_table_items().at(0) : nullptr;
+    const ObAggFunRawExpr *count = outer.get_aggr_item_size() == 1
+        ? outer.get_aggr_item(0) : nullptr;
+    const ObMatchFunRawExpr *match = inner.get_match_exprs().count() == 1
+        ? inner.get_match_exprs().at(0) : nullptr;
+    const TableItem *base = inner.get_table_items().count() == 1
+        ? inner.get_table_items().at(0) : nullptr;
+    eligible = nullptr != view && view->is_generated_table() && view->ref_query_ == &inner
+        && outer.get_from_item_size() == 1 && outer.get_joined_tables().empty()
+        && outer.get_from_item(0).table_id_ == view->table_id_
+        && outer.get_semi_infos().empty() && outer.get_subquery_exprs().empty()
+        && outer.get_condition_exprs().empty() && !outer.is_set_stmt()
+        && outer.is_scala_group_by() && !outer.has_having() && !outer.has_select_into()
+        && !outer.has_distinct() && !outer.has_window_function() && !outer.has_order_by()
+        && !outer.has_for_update() && !outer.has_limit()
+        && nullptr != count && count->get_expr_type() == T_FUN_COUNT
+        && count->get_real_param_count() == 0 && !count->is_param_distinct()
+        && outer.get_select_item_size() == 1 && outer.get_select_item(0).expr_ == count
+        && nullptr != base && base->is_basic_table() && inner.get_from_item_size() == 1
+        && inner.get_from_item(0).table_id_ == base->table_id_
+        && inner.get_joined_tables().empty() && inner.get_semi_infos().empty()
+        && inner.get_subquery_exprs().empty() && !inner.is_set_stmt()
+        && !inner.has_group_by() && !inner.has_rollup() && !inner.has_having()
+        && !inner.has_distinct() && !inner.has_window_function() && !inner.has_order_by()
+        && !inner.has_select_into()
+        && !inner.has_for_update() && !inner.has_fetch() && !inner.is_fetch_with_ties()
+        && inner.get_aggr_item_size() == 0 && inner.get_condition_exprs().count() == 1
+        && nullptr != match && match->get_expr_type() == T_FUN_MATCH_AGAINST
+        && match->get_mode_flag() == NATURAL_LANGUAGE_MODE
+        && match->get_columns_boosts().empty() && nullptr == match->get_param_text_expr();
+    if (eligible) {
+      const ObRawExpr *filter = inner.get_condition_exprs().at(0);
+      eligible = nullptr != filter && (filter == match
+          || (filter->get_expr_type() == T_OP_BOOL && filter->get_param_count() == 1
+              && filter->get_param_expr(0) == match));
+      for (int64_t i = 0; eligible && i < inner.get_select_item_size(); ++i) {
+        const ObRawExpr *expr = inner.get_select_item(i).expr_;
+        eligible = nullptr != expr && (expr->is_column_ref_expr() || expr->is_const_expr());
+      }
+    }
+  }
+  return eligible;
+}
+
+// full-text index queries on a single base table are processed with order preservation.
 // (Order is not preserved in multi-table join scenarios.)
-int ObTransformPreProcess::preserve_order_for_fulltext_search(ObDMLStmt *stmt, bool& trans_happened)
+int ObTransformPreProcess::preserve_order_for_fulltext_search(
+    const ObIArray<ObParentDMLStmt> &parent_stmts, ObDMLStmt *stmt, bool& trans_happened)
 {
   int ret = OB_SUCCESS;
   trans_happened = false;
@@ -3798,6 +3859,26 @@ int ObTransformPreProcess::preserve_order_for_fulltext_search(ObDMLStmt *stmt, b
   ObRawExpr *match_expr = nullptr;
   if (OB_ISNULL(stmt)) {
     ret = OB_ERR_UNEXPECTED;
+  } else if (is_cardinality_only_fulltext_view(parent_stmts, *stmt)) {
+    // No observable ranking to preserve. The ordinary predicate-only retrieval
+    // path can then stop as soon as the view's LIMIT/OFFSET is satisfied.
+    // Prune unused values as well: retaining a projected base-table column
+    // would introduce a rowkey lookup even though COUNT(*) never consumes it.
+    // Use the shared pruning utility to update parent column metadata and add
+    // a dummy constant projection when all view columns have been removed.
+    ObSelectStmt &view = static_cast<ObSelectStmt &>(*stmt);
+    ObDMLStmt &parent = *parent_stmts.at(parent_stmts.count() - 1).stmt_;
+    if (view.get_select_item_size() != 1 || !view.get_select_item(0).expr_->is_const_expr()) {
+      ObSqlBitSet<> removed_idxs;
+      for (int64_t i = 0; OB_SUCC(ret) && i < view.get_select_item_size(); ++i) {
+        ret = removed_idxs.add_member(i);
+      }
+      if (OB_SUCC(ret) && OB_FAIL(ObTransformUtils::remove_select_items(
+          ctx_, parent.get_from_item(0).table_id_, view, parent, removed_idxs))) {
+      } else if (OB_SUCC(ret)) {
+        trans_happened = true;
+      }
+    }
   } else if (stmt->get_table_items().count() != 1 || stmt->get_order_item_size() != 0) {
     // do nothing
   } else if (stmt->is_select_stmt() && 

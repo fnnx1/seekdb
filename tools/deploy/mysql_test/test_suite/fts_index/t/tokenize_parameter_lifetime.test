@@ -1,0 +1,23 @@
+# description: Per-row TOKENIZE parameters survive JSON parsing and result packing.
+set names utf8mb4;
+--disable_warnings
+drop table if exists tokenize_parameter_lifetime;
+--enable_warnings
+create table tokenize_parameter_lifetime(id int primary key, content varchar(2048), parser_name varchar(16), properties varchar(1024));
+insert into tokenize_parameter_lifetime values
+  (1, 'Alpha ALPHA beta beta gamma', 'beng', '[{"output":"all"}]'),
+  (2, 'a ab abc abcd abcde abcdef', 'space', '[{"additional_args":[{"min_token_size":4},{"max_token_size":10}]},{"output":"all"}]'),
+  (3, '中华人民共和国人民大会堂 数据库索引 中文分词', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]'),
+  (4, '中华人民共和国人民大会堂 数据库索引 中文分词', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]'),
+  (5, '一二三四五 六七八', 'ngram2', '[{"additional_args":[{"min_ngram_size":2},{"max_ngram_size":4}]},{"output":"all"}]'),
+  (6, '', 'beng', '[]'),
+  (7, null, 'space', '[{"output":"all"}]');
+select id, tokenize(content, parser_name, properties) as tokens from tokenize_parameter_lifetime order by id;
+select id, tokenize(content, parser_name, properties) as tokens from tokenize_parameter_lifetime order by id desc;
+select tokenize(concat(tokenize('Alpha beta gamma', 'beng'), ' extra'), 'beng', '[{"output":"all"}]') as nested_tokens;
+insert into tokenize_parameter_lifetime values (8, repeat('大小写 ASCII ascii 数据库索引 ', 50), 'ik', '[{"output":"all"}]');
+select tokenize(content, parser_name, properties) as repeated_tokens from tokenize_parameter_lifetime where id=8;
+--error ER_WRONG_ARGUMENTS
+select tokenize('one two three', 'space', '[{"additional_args":[{"min_token_size":11},{"max_token_size":10}]}]');
+select tokenize('one two three', 'space', '[{"additional_args":[{"min_token_size":3},{"max_token_size":10}]},{"output":"all"}]') as after_error;
+drop table tokenize_parameter_lifetime;

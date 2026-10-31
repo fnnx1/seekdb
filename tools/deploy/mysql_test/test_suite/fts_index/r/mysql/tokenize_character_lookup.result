@@ -1,0 +1,56 @@
+set names utf8mb4;
+select tokenize('一一对应 一个中国 一个中心 不中不西 中华人民共和国 华中科技大学 南京市长江大桥 研究生命起源 足球运动员 黑龙江省 龟兔赛跑', 'ik');
+tokenize('一一对应 一个中国 一个中心 不中不西 中华人民共和国 华中科技大学 南京市长江大桥 研究生命起源 足球运动员 黑龙江省 龟兔赛跑', 'ik')
+["赛跑", "龟", "足球", "华中", "一个中心", "一个中国", "不中不西", "研究", "中华人民共和国", "长江大桥", "一一对应", "黑龙江省", "兔", "生命", "科技大学", "起源", "南京市", "运动员"]
+select tokenize('一一对应 一个中国 一个中心 不中不西 中华人民共和国 华中科技大学 南京市长江大桥 研究生命起源 足球运动员 黑龙江省 龟兔赛跑', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+tokenize('一一对应 一个中国 一个中心 不中不西 中华人民共和国 华中科技大学 南京市长江大桥 研究生命起源 足球运动员 黑龙江省 龟兔赛跑', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all
+{"tokens": [{"大桥": 1}, {"省": 1}, {"赛跑": 1}, {"应": 1}, {"中科": 1}, {"不": 1}, {"心": 1}, {"大学": 1}, {"龟": 1}, {"足球": 1}, {"共和": 1}, {"中华人民": 1}, {"中": 2}, {"华中": 1}, {"人民": 1}, {"人民共和国": 1}, {"华人": 1}, {"科技大": 1}, {"一个中心": 1}, {"对": 1}, {"一个中国": 1}, {"一对": 1}, {"不中不西": 1}, {"研究": 1}, {"中心": 1}, {"一": 2}, {"共和国": 1}, {"一个": 2}, {"中华人民共和国": 1}, {"长江大桥": 1}, {"一一对应": 1}, {"黑龙": 1}, {"个": 2}, {"足球运动": 1}, {"个中": 2}, {"黑龙江省": 1}, {"兔": 1}, {"生命": 1}, {"不中": 1}, {"球运": 1}, {"对应": 1}, {"科技大学": 1}, {"龙江": 1}, {"中国": 1}, {"科技": 1}, {"中华": 1}, {"起源": 1}, {"南京": 1}, {"一一": 1}, {"市长": 1}, {"动员": 1}, {"长江": 1}, {"西": 1}, {"黑龙江": 1}, {"研究生": 1}, {"华中科技": 1}, {"国": 2}, {"南京市": 1}, {"运动": 1}, {"运动员": 1}], "doc_len": 66}
+select tokenize('研究研究生研究生物研究生命起源 南京南京市南京市长江大桥 长江长江大桥 大桥大桥长江长江', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+tokenize('研究研究生研究生物研究生命起源 南京南京市南京市长江大桥 长江长江大桥 大桥大桥长江长江', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]')
+{"tokens": [{"大桥": 2}, {"生物": 1}, {"研究": 3}, {"长江大桥": 2}, {"生命": 1}, {"起源": 1}, {"南京": 1}, {"长江": 3}, {"研究生": 1}, {"南京市": 2}], "doc_len": 17}
+select tokenize('研究研究生研究生物研究生命起源 南京南京市南京市长江大桥 长江长江大桥 大桥大桥长江长江', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+tokenize('研究研究生研究生物研究生命起源 南京南京市南京市长江大桥 长江长江大桥 大桥大桥长江长江', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]')
+{"tokens": [{"大桥": 4}, {"生": 1}, {"生物": 1}, {"研究": 4}, {"桥长": 1}, {"长江大桥": 2}, {"生命": 1}, {"市": 1}, {"起源": 1}, {"南京": 3}, {"市长": 1}, {"长江": 5}, {"研究生": 3}, {"南京市": 2}], "doc_len": 30}
+select tokenize('𠮷𠀀😀 éÉ Ωω 한국어 日本語 ＡＢＣ １２３ 3.14公斤 一千公里 a中华人民共和国b a数据库b 𠮷𠀀😀', 'ik', '[{"output":"all"}]');
+tokenize('𠮷𠀀😀 éÉ Ωω 한국어 日本語 ＡＢＣ １２３ 3.14公斤 一千公里 a中华人民共和国b a数据库b 𠮷𠀀😀', 'ik', '[{"output":"all"}]')
+{"tokens": [{"b": 2}, {"a": 2}, {"3.14公斤": 1}, {"日本": 1}, {"어": 1}, {"中华人民共和国": 1}, {"一千公里": 1}, {"数据库": 1}, {"１２３": 1}, {"ａｂｃ": 1}, {"국": 1}, {"語": 1}, {"한": 1}], "doc_len": 15}
+select tokenize(convert(concat('中国', char(0), '长江大桥', char(9), '中文数据库', char(10), '南京市研究生命') using utf8mb4), 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+tokenize(convert(concat('中国', char(0), '长江大桥', char(9), '中文数据库', char(10), '南京市研究生命') using utf8mb4), 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]')
+{"tokens": [{"长江大桥": 1}, {"数据": 1}, {"中国": 1}, {"研究生": 1}, {"研究": 1}, {"南京市": 1}, {"南京": 1}, {"数据库": 1}, {"中文": 1}, {"生命": 1}, {"长江": 1}, {"市": 1}, {"库": 1}, {"大桥": 1}], "doc_len": 14}
+drop table if exists tokenize_character_lookup;
+create table tokenize_character_lookup(id int primary key, content varchar(4096), parser_name varchar(16), properties varchar(1024));
+insert into tokenize_character_lookup values
+(1, repeat('一一对应南京市长江大桥研究生命起源龟兔赛跑。', 12), 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]'),
+(2, repeat('一一对应南京市长江大桥研究生命起源龟兔赛跑。', 12), 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]'),
+(3, '长江大桥长江长江 中文数据库中文中文 𠮷龟兔赛跑𠮷', 'ik', '[{"output":"all"}]'),
+(4, 'Alpha ALPHA beta beta Unicode', 'beng', '[{"output":"all"}]'),
+(5, '', 'ik', '[{"output":"all"}]'),
+(6, null, 'ik', '[{"output":"all"}]');
+select id, tokenize(content, parser_name, properties) as tokens from tokenize_character_lookup order by id;
+id	tokens
+1	{"tokens": [{"生命": 12}, {"长江大桥": 12}, {"起源": 12}, {"赛跑": 12}, {"一一对应": 12}, {"研究": 12}, {"兔": 12}, {"龟": 12}, {"南京市": 12}], "doc_len": 108}
+2	{"tokens": [{"生命": 12}, {"市长": 12}, {"长江大桥": 12}, {"南京": 12}, {"对": 12}, {"研究生": 12}, {"对应": 12}, {"起源": 12}, {"应": 12}, {"一一": 12}, {"大桥": 12}, {"赛跑": 12}, {"长江": 12}, {"一一对应": 12}, {"研究": 12}, {"一对": 12}, {"兔": 12}, {"龟": 12}, {"南京市": 12}], "doc_len": 228}
+3	{"tokens": [{"长江大桥": 1}, {"赛跑": 1}, {"兔": 1}, {"数据库": 1}, {"中文": 3}, {"长江": 2}, {"龟": 1}], "doc_len": 10}
+4	{"tokens": [{"alpha": 2}, {"unicode": 1}, {"beta": 2}], "doc_len": 5}
+5	{"tokens": [], "doc_len": 0}
+6	{"tokens": [], "doc_len": 0}
+select id, tokenize(content, parser_name, properties) as tokens from tokenize_character_lookup order by id desc;
+id	tokens
+6	{"tokens": [], "doc_len": 0}
+5	{"tokens": [], "doc_len": 0}
+4	{"tokens": [{"alpha": 2}, {"unicode": 1}, {"beta": 2}], "doc_len": 5}
+3	{"tokens": [{"长江大桥": 1}, {"赛跑": 1}, {"兔": 1}, {"数据库": 1}, {"中文": 3}, {"长江": 2}, {"龟": 1}], "doc_len": 10}
+2	{"tokens": [{"生命": 12}, {"市长": 12}, {"长江大桥": 12}, {"南京": 12}, {"对": 12}, {"研究生": 12}, {"对应": 12}, {"起源": 12}, {"应": 12}, {"一一": 12}, {"大桥": 12}, {"赛跑": 12}, {"长江": 12}, {"一一对应": 12}, {"研究": 12}, {"一对": 12}, {"兔": 12}, {"龟": 12}, {"南京市": 12}], "doc_len": 228}
+1	{"tokens": [{"生命": 12}, {"长江大桥": 12}, {"起源": 12}, {"赛跑": 12}, {"一一对应": 12}, {"研究": 12}, {"兔": 12}, {"龟": 12}, {"南京市": 12}], "doc_len": 108}
+select tokenize('研究生命起源', 'ik', '[{"additional_args":[{"ik_mode":"invalid"}]}]');
+ERROR HY000: Incorrect arguments to the ik_mode should be max_word or smart
+select tokenize('研究生命起源研究生命起源', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+tokenize('研究生命起源研究生命起源', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]')
+{"tokens": [{"研究": 2}, {"起源": 2}, {"生命": 2}], "doc_len": 6}
+select tokenize('研究生命起源研究生命起源', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+tokenize('研究生命起源研究生命起源', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]')
+{"tokens": [{"研究生": 2}, {"研究": 2}, {"起源": 2}, {"生命": 2}], "doc_len": 8}
+select tokenize(concat(tokenize('南京市长江大桥', 'ik'), ' 研究生命起源'), 'ik', '[{"output":"all"}]');
+tokenize(concat(tokenize('南京市长江大桥', 'ik'), ' 研究生命起源'), 'ik', '[{"output":"all"}]')
+{"tokens": [{"生命": 1}, {"长江大桥": 1}, {"起源": 1}, {"南京市": 1}, {"研究": 1}], "doc_len": 5}
+drop table tokenize_character_lookup;

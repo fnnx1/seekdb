@@ -1,0 +1,14 @@
+{
+  "src/sql/engine/sort/ob_sort_op_impl.cpp": {
+    "before": "330c4e82ccdc0555c19bb82197ae6de2e73f924ca780b64050291182e24ffa6a",
+    "after": "2563cf892faa3fca54b466f3cd287ec73ff383b997be2a09e6c6ca89973d33ef"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/r/mysql/sort_repeated_prefix.result": {
+    "before": null,
+    "after": "5c3d18131f9f5221436a78706b8fbb607389625f7960e59327b4152aa9e293f2"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/t/sort_repeated_prefix.test": {
+    "before": null,
+    "after": "bd02b0556fbd5eb2bf089042ae42a105395969591edead01f4dfc71b8acfbc5f"
+  }
+}

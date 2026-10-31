@@ -59,6 +59,11 @@ public:
   static size_t estimate_size(size_t word_num);
 
   size_t capacity() const { return header_.capacity_; }
+  size_t size() const { return header_.count_; }
+
+  // Copy character codes into caller-provided storage without changing codes.
+  // The target capacity must leave at least one unused slot.
+  int rehash_into(ObArrayHashMap &target, size_t capacity) const;
 
   int init(size_t word_num);
 
@@ -66,6 +71,7 @@ public:
   int insert(const ObString &key, ObFTWordCode code);
 
   int find(const ObFTSingleWord &word, ObFTWordCode &code) const;
+  int find(const ObString &word, ObFTWordCode &code) const;
 
 private:
   struct Header header_;
@@ -144,6 +150,8 @@ public:
 
 private:
   int expand();
+
+  int compact_code_map();
 
   int encode(const ObString &word, ObFTWordCode &code, bool add);
 

@@ -1,0 +1,87 @@
+[
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c1-fresh/old1",
+    "bytes": 2282044809,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c1-fresh/new1",
+    "bytes": 2282036603,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c1-fresh/new2",
+    "bytes": 2282048911,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c1-fresh/old2",
+    "bytes": 2282036598,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c2-fresh/old1",
+    "bytes": 2282032498,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c2-fresh/new1",
+    "bytes": 2282048914,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c2-fresh/new2",
+    "bytes": 2282040704,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c2-fresh/old2",
+    "bytes": 2282040702,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c3-fresh/old1",
+    "bytes": 2282048852,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c3-fresh/new1",
+    "bytes": 2282036543,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c3-fresh/new2",
+    "bytes": 2282036542,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c3-fresh/old2",
+    "bytes": 2282036541,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c3-confirm/old1",
+    "bytes": 2282048833,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c3-confirm/new1",
+    "bytes": 2282040647,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c3-confirm/new2",
+    "bytes": 2282044750,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-c3-confirm/old2",
+    "bytes": 2282044748,
+    "removed": true
+  },
+  {
+    "absolute_path": "/home/fbd2451702/fts-round8-cold-candidate3",
+    "bytes": 2281790391,
+    "removed": true
+  }
+]

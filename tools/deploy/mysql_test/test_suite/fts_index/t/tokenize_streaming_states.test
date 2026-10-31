@@ -1,0 +1,20 @@
+# description: Ordered IK state/chain traversal and ASCII stopword fast-path equivalence.
+set names utf8mb4;
+select tokenize('a about an are as at be by com de en for from how i in is it la of on or that the this to was what when where who will with und www', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]');
+select tokenize('A ABOUT AN ARE AS AT BE BY COM DE EN FOR FROM HOW I IN IS IT LA OF ON OR THAT THE THIS TO WAS WHAT WHEN WHERE WHO WILL WITH UND WWW', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]');
+select tokenize('aa abo abouta aand areaa asset athlete been byte company deed ending forte froma however ii ina island item lace offline ongoing order thatch theme thisa together wasp whatnot whenever whereby whose willow without under wwwa abcdefghijkl abcdefghijklm', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]');
+select tokenize('THE thé thè thê thë A à Á å Ä is IS ís İS ıS résumé RESUME cafe CAFÉ Straße STRASSE αβγ русский 日本語', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]');
+select tokenize(convert('THE ABOUT Alpha beta' using binary), 'beng', '[{"output":"all"}]');
+select tokenize('中华人民共和国全国人民代表大会常务委员会中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+select tokenize('中华人民共和国全国人民代表大会常务委员会中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+select tokenize('一一对应。不中不西，中华人民共和国；国际化。天文学，学习；工厂。我的文章，数据库。日本；未来。测试，码头；索引。网络，词语；语言。键盘，集合；阿拉伯。韧性，馨香；龟甲。', 'ik', '[{"output":"all"}]');
+select tokenize('a中华人民共和国b one数据库two 3.14公斤 １２３平方公里 ＡＢＣ半角ｶﾀｶﾅ カタカナ 한국어 😀 𠮷', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+select tokenize('a中华人民共和国b one数据库two 3.14公斤 １２３平方公里 ＡＢＣ半角ｶﾀｶﾅ カタカナ 한국어 😀 𠮷', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+--disable_warnings
+drop table if exists tokenize_streaming_states;
+--enable_warnings
+create table tokenize_streaming_states(id int primary key, content varchar(4096));
+insert into tokenize_streaming_states values(1, repeat('中华人民共和国数据库索引。', 50)),(2, repeat('中国 北京 上海 数据库。', 40));
+select id, tokenize(content, 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]') as tokens from tokenize_streaming_states order by id;
+select id, tokenize(content, 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]') as tokens from tokenize_streaming_states order by id;
+drop table tokenize_streaming_states;

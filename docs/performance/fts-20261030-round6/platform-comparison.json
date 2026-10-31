@@ -1,0 +1,214 @@
+{
+  "metrics": {
+    "build_ik_all_sec": {
+      "previous": 6.053,
+      "current": 5.551,
+      "time_reduction": 0.08293408227325294
+    },
+    "build_ik_content_sec": {
+      "previous": 4.727,
+      "current": 4.225,
+      "time_reduction": 0.10619843452506894
+    },
+    "build_beng_en_sec": {
+      "previous": 2.323,
+      "current": 2.021,
+      "time_reduction": 0.13000430477830394
+    },
+    "tokenize_ik_avg_ms": {
+      "previous": 0.0679,
+      "current": 0.0612,
+      "time_reduction": 0.09867452135493382
+    },
+    "tokenize_beng_avg_ms": {
+      "previous": 0.0373,
+      "current": 0.0368,
+      "time_reduction": 0.013404825737265424
+    },
+    "query_cn_avg_ms": {
+      "previous": 0.5468,
+      "current": 0.3918,
+      "time_reduction": 0.28346744696415505
+    },
+    "query_beng_avg_ms": {
+      "previous": 0.8001,
+      "current": 0.5784,
+      "time_reduction": 0.2770903637045369
+    },
+    "query_mixed_avg_ms": {
+      "previous": 0.5589,
+      "current": 0.412,
+      "time_reduction": 0.26283771694399716
+    },
+    "query_limit_avg_ms": {
+      "previous": 0.1119,
+      "current": 0.1007,
+      "time_reduction": 0.1000893655049151
+    }
+  },
+  "all_nine_improved": true,
+  "category_reduction": {
+    "build": 0.10637894052554193,
+    "tokenize": 0.05603967354609962,
+    "query": 0.23087122327940104
+  },
+  "public_baseline_recalculation": {
+    "previous": {
+      "score": 100.0,
+      "mean_improvement": 0.9067276817156902,
+      "full_score_improvement": 0.5,
+      "categories": {
+        "build": {
+          "improvement": 0.8348189451574636,
+          "metrics": [
+            {
+              "metric": "build_ik_all_sec",
+              "baseline": 35.2836,
+              "current": 6.053,
+              "improvement": 0.8284472106020927
+            },
+            {
+              "metric": "build_ik_content_sec",
+              "baseline": 28.3764,
+              "current": 4.727,
+              "improvement": 0.8334179106581525
+            },
+            {
+              "metric": "build_beng_en_sec",
+              "baseline": 14.7578,
+              "current": 2.323,
+              "improvement": 0.8425917142121454
+            }
+          ]
+        },
+        "tokenize": {
+          "improvement": 0.9114786707305821,
+          "metrics": [
+            {
+              "metric": "tokenize_ik_avg_ms",
+              "baseline": 0.76478,
+              "current": 0.0679,
+              "improvement": 0.9112162974973196
+            },
+            {
+              "metric": "tokenize_beng_avg_ms",
+              "baseline": 0.42262,
+              "current": 0.0373,
+              "improvement": 0.9117410439638446
+            }
+          ]
+        },
+        "query": {
+          "improvement": 0.9738854292590249,
+          "metrics": [
+            {
+              "metric": "query_cn_avg_ms",
+              "baseline": 16.66282,
+              "current": 0.5468,
+              "improvement": 0.967184426165559
+            },
+            {
+              "metric": "query_beng_avg_ms",
+              "baseline": 24.30424,
+              "current": 0.8001,
+              "improvement": 0.9670798181716441
+            },
+            {
+              "metric": "query_mixed_avg_ms",
+              "baseline": 17.55928,
+              "current": 0.5589,
+              "improvement": 0.968170676702006
+            },
+            {
+              "metric": "query_limit_avg_ms",
+              "baseline": 16.23338,
+              "current": 0.1119,
+              "improvement": 0.9931067959968904
+            }
+          ]
+        }
+      }
+    },
+    "current": {
+      "score": 100.0,
+      "mean_improvement": 0.916495202194563,
+      "full_score_improvement": 0.5,
+      "categories": {
+        "build": {
+          "improvement": 0.8522796401635789,
+          "metrics": [
+            {
+              "metric": "build_ik_all_sec",
+              "baseline": 35.2836,
+              "current": 5.551,
+              "improvement": 0.8426747837522248
+            },
+            {
+              "metric": "build_ik_content_sec",
+              "baseline": 28.3764,
+              "current": 4.225,
+              "improvement": 0.851108667766172
+            },
+            {
+              "metric": "build_beng_en_sec",
+              "baseline": 14.7578,
+              "current": 2.021,
+              "improvement": 0.86305546897234
+            }
+          ]
+        },
+        "tokenize": {
+          "improvement": 0.9164505633675762,
+          "metrics": [
+            {
+              "metric": "tokenize_ik_avg_ms",
+              "baseline": 0.76478,
+              "current": 0.0612,
+              "improvement": 0.9199769868458902
+            },
+            {
+              "metric": "tokenize_beng_avg_ms",
+              "baseline": 0.42262,
+              "current": 0.0368,
+              "improvement": 0.9129241398892622
+            }
+          ]
+        },
+        "query": {
+          "improvement": 0.9807554030525338,
+          "metrics": [
+            {
+              "metric": "query_cn_avg_ms",
+              "baseline": 16.66282,
+              "current": 0.3918,
+              "improvement": 0.9764865731010718
+            },
+            {
+              "metric": "query_beng_avg_ms",
+              "baseline": 24.30424,
+              "current": 0.5784,
+              "improvement": 0.9762016833276828
+            },
+            {
+              "metric": "query_mixed_avg_ms",
+              "baseline": 17.55928,
+              "current": 0.412,
+              "improvement": 0.9765366233695232
+            },
+            {
+              "metric": "query_limit_avg_ms",
+              "baseline": 16.23338,
+              "current": 0.1007,
+              "improvement": 0.9937967324118575
+            }
+          ]
+        }
+      }
+    }
+  },
+  "platform_reported": {
+    "previous": 86.75326756674406,
+    "current": 75.7902815351533
+  },
+  "finding": "All nine current times are lower. With the same positive baseline and documented monotonic formula, score cannot decrease. Platform baseline, calculation or metric/score pairing cannot be verified from these reports; no definite cause is established."
+}

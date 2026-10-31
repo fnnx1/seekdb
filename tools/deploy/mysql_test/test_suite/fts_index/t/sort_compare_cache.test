@@ -1,0 +1,18 @@
+# Sort comparator metadata must remain correct beyond the inline key cache,
+# with Unicode/NULL/binary keys, prefix-ordered input, windows and rescans.
+SET NAMES utf8mb4;
+--disable_warnings
+DROP TABLE IF EXISTS fts_sort_cache;
+--enable_warnings
+CREATE TABLE fts_sort_cache(id INT PRIMARY KEY, p INT, c1 VARCHAR(8), c2 VARCHAR(8), c3 VARCHAR(8), c4 VARCHAR(8), c5 VARCHAR(8), c6 VARCHAR(8), c7 VARCHAR(8), c8 VARCHAR(8), v VARCHAR(64) COLLATE utf8mb4_general_ci, b VARBINARY(8), KEY idx_p(p));
+INSERT INTO fts_sort_cache(id,p,v,b) VALUES(1,0,NULL,NULL),(2,1,'',UNHEX('')),(3,2,' ',UNHEX('00')),(4,0,'a',UNHEX('0000')),(5,1,'A',UNHEX('20')),(6,2,'a ',UNHEX('0020')),(7,0,'a',UNHEX('6100')),(8,1,'A  ',UNHEX('61')),(9,2,'a',UNHEX('610000')),(10,0,'résumé',UNHEX('ff')),(11,1,'RESUME',UNHEX('ffff')),(12,2,'数据库',UNHEX('0001')),(13,0,'数据',UNHEX('01')),(14,1,'😀',UNHEX('0100')),(15,2,'a😀',UNHEX('7f')),(16,0,'ß',UNHEX('80')),(17,1,'ss',UNHEX('8000')),(18,2,'Á',UNHEX('8020')),(19,0,UNHEX('6100'),UNHEX('61')),(20,1,UNHEX('612000'),UNHEX('6100')),(21,2,NULL,UNHEX('00')),(22,0,'Alpha',NULL),(23,1,'ALPHA ',UNHEX('00')),(24,2,'alpha',UNHEX('0000'));
+UPDATE fts_sort_cache SET c1='x',c2='x ',c3='X',c4=NULL,c5='',c6=' ',c7='y',c8='Y';
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT','false') */ id,HEX(v),HEX(b) FROM fts_sort_cache ORDER BY c1,c2 DESC,c3,c4 DESC,c5,c6 DESC,c7,c8 DESC,v,b,id;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT','false') */ id,HEX(v),HEX(b) FROM fts_sort_cache ORDER BY v,b,c1,c2 DESC,c3,c4 DESC,c5,c6 DESC,c7,c8 DESC,id;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT','false') */ id,HEX(v),HEX(b) FROM fts_sort_cache ORDER BY c1 DESC,c2,c3 DESC,c4,c5 DESC,c6,c7 DESC,c8,v DESC,b DESC,id DESC;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT','false') */ id,HEX(v),HEX(b) FROM fts_sort_cache ORDER BY c1,c2,c3,c4,c5,c6,c7,c8,v,b,id LIMIT 7 OFFSET 5;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT','false') */ id,p,ROW_NUMBER() OVER(PARTITION BY p ORDER BY c1,c2,c3,c4,c5,c6,c7,c8,v,b,id) AS rn,DENSE_RANK() OVER(PARTITION BY p ORDER BY v) AS dr FROM fts_sort_cache ORDER BY id;
+SELECT /*+ INDEX(t idx_p) OPT_PARAM('ENABLE_NEWSORT','false') */ id,p,HEX(v),HEX(b) FROM fts_sort_cache t ORDER BY p,c1,c2,c3,c4,c5,c6,c7,c8,v,b,id;
+SELECT o.id,(SELECT /*+ NO_UNNEST OPT_PARAM('ENABLE_NEWSORT','false') */ s.id FROM fts_sort_cache s WHERE s.p=o.p ORDER BY s.v,s.b,s.id LIMIT 1) AS first_id FROM fts_sort_cache o WHERE o.id IN(1,2,3,4,5,6) ORDER BY o.id;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT','false') */ id,HEX(v) FROM fts_sort_cache ORDER BY v COLLATE utf8mb4_bin,b,id;
+DROP TABLE fts_sort_cache;

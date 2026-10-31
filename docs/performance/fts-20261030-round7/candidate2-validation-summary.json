@@ -1,0 +1,196 @@
+{
+  "candidate": "candidate2",
+  "baseline_commit": "7fe1edb7bf6a1ce209facae9770e1fd182fd538d",
+  "source_files": 4,
+  "differential_groups": {
+    "retrieval_binary_ids": {
+      "statements": 18,
+      "exact_result_match": true
+    },
+    "predicate_only_match": {
+      "statements": 44,
+      "exact_result_match": true
+    },
+    "document_local_tokens": {
+      "statements": 26,
+      "exact_result_match": true
+    },
+    "retrieval_sort_keys": {
+      "statements": 24,
+      "exact_result_match": true
+    },
+    "sort_ascii_collation": {
+      "statements": 14,
+      "exact_result_match": true
+    },
+    "cardinality_only_match": {
+      "statements": 39,
+      "exact_result_match": true
+    },
+    "presence_batch_union": {
+      "statements": 58,
+      "exact_result_match": true
+    },
+    "encoded_sort_collation": {
+      "statements": 14,
+      "exact_result_match": true
+    },
+    "retrieval_fixed_width_ids": {
+      "statements": 19,
+      "exact_result_match": true
+    },
+    "fts_build_batch_boundaries": {
+      "statements": 49,
+      "exact_result_match": true
+    },
+    "string_diff_batch_payloads": {
+      "statements": 28,
+      "exact_result_match": true
+    },
+    "tokenize_dictionary_compaction": {
+      "statements": 9,
+      "exact_result_match": true
+    },
+    "fts_build_sstable_source": {
+      "statements": 22,
+      "exact_result_match": true
+    },
+    "sort_compare_cache": {
+      "statements": 14,
+      "exact_result_match": true
+    },
+    "sort_fixed_width_binary": {
+      "statements": 10,
+      "exact_result_match": true
+    },
+    "presence_sorted_runs": {
+      "statements": 57,
+      "exact_result_match": true
+    }
+  },
+  "native_tests": {
+    "cardinality_only_match.runner.txt": {
+      "status": "PASS"
+    },
+    "document_local_tokens.runner.txt": {
+      "status": "PASS"
+    },
+    "encoded_fulltext_build.runner.txt": {
+      "status": "PASS"
+    },
+    "encoded_sort_collation.runner.txt": {
+      "status": "PASS"
+    },
+    "fts_build_batch_boundaries.runner.txt": {
+      "status": "PASS"
+    },
+    "fts_build_sstable_source.runner.txt": {
+      "status": "PASS"
+    },
+    "predicate_only_match.runner.txt": {
+      "status": "PASS"
+    },
+    "presence_batch_union.runner.txt": {
+      "status": "PASS"
+    },
+    "presence_sorted_runs.runner.txt": {
+      "status": "PASS"
+    },
+    "retrieval_binary_ids.runner.txt": {
+      "status": "PASS"
+    },
+    "retrieval_fixed_width_ids.runner.txt": {
+      "status": "PASS"
+    },
+    "retrieval_sort_keys.runner.txt": {
+      "status": "PASS"
+    },
+    "sort_ascii_collation.runner.txt": {
+      "status": "PASS"
+    },
+    "sort_compare_cache.runner.txt": {
+      "status": "PASS"
+    },
+    "sort_fixed_width_binary.runner.txt": {
+      "status": "PASS"
+    },
+    "string_diff_batch_payloads.runner.txt": {
+      "status": "PASS"
+    },
+    "tokenize_character_lookup.runner.txt": {
+      "status": "PASS"
+    },
+    "tokenize_dictionary_compaction.runner.txt": {
+      "status": "PASS"
+    },
+    "tokenize_parameter_lifetime.runner.txt": {
+      "status": "PASS"
+    },
+    "tokenize_streaming_states.runner.txt": {
+      "status": "PASS"
+    }
+  },
+  "differential_statement_count": 445,
+  "exact": {
+    "exact_match": true,
+    "queries": 18,
+    "rows": 27851
+  },
+  "bmw": {
+    "exact_match": true,
+    "queries": 88,
+    "rows": 155947,
+    "errors": 4
+  },
+  "tokenize": {
+    "exact_match": true
+  },
+  "concurrent": {
+    "sessions": 8,
+    "checked": 3120,
+    "status": "PASS",
+    "per_session": [
+      390,
+      390,
+      390,
+      390,
+      390,
+      390,
+      390,
+      390
+    ]
+  },
+  "decoder_proof": {
+    "diagnostic_only": true,
+    "binary": "/home/fbd2451702/fts-build-setup/seekdb-round7-candidate2",
+    "target": "fts_large_bench.docs (read only)",
+    "started_utc": "2026-10-30T10:41:02.239303+00:00",
+    "pid": 1970374,
+    "version": "5.7.25-OceanBase seekdb-v1.4.0.0",
+    "gdb_ready": true,
+    "matching_documents": 11000,
+    "sql_wall_sec": 2.290877,
+    "debugger_exit_code": 0,
+    "debugger": {
+      "diagnostic_only": true,
+      "pid": 1970374,
+      "elapsed_sec": 2.074,
+      "timed_out": false,
+      "forced_debugger_cleanup": false,
+      "gdb_exit_code": 0,
+      "detached_confirmed": true,
+      "proof": {
+        "batch_size": 256,
+        "frame": "oceanbase::blocksstable::ObStringDiffDecoder::batch_decode",
+        "source_line": "ob_string_diff_decoder.cpp:193",
+        "pid": 1970374
+      },
+      "success": true
+    },
+    "success": true,
+    "finished_utc": "2026-10-30T10:41:04.671079+00:00"
+  },
+  "binary_sha256": "9aeee65e28953cb05b4827d021eaf46ff3560609175400d6f91a5b6be114b024",
+  "build_exit": 0,
+  "comparison_note": "Exact SQL columns, rows, errors and order; elapsed_ms excluded only from correctness equality. Timing reports retain every sample."
+}

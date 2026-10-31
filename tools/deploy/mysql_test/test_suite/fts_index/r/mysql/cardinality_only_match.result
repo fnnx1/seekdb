@@ -1,0 +1,97 @@
+set names utf8mb4;
+drop table if exists cardinality_only_match;
+create table cardinality_only_match(id int primary key, content text, tag int, fulltext index ft(content) with parser beng);
+insert into cardinality_only_match values
+(1,'alpha alpha alpha beta',null),(2,'alpha beta beta',2),
+(3,'alpha gamma gamma gamma gamma',3),(4,'beta delta',null),
+(5,'theta epsilon zeta',5),(6,'alpha',null),(7,'beta',7),(8,null,8);
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta')) v;
+count(*)
+6
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 0) v;
+count(*)
+0
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 1) v;
+count(*)
+1
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 3) v;
+count(*)
+3
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 100) v;
+count(*)
+6
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 3 offset 4) v;
+count(*)
+2
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 3 offset 100) v;
+count(*)
+0
+select count(*) from (select 1 from cardinality_only_match where match(content) against('nonmatchingword') limit 3) v;
+count(*)
+0
+select count(*) from (select tag from cardinality_only_match where match(content) against('alpha beta') limit 3) v;
+count(*)
+3
+select count(*) from (select id,tag,content from cardinality_only_match where match(content) against('alpha beta') limit 3 offset 1) v;
+count(*)
+3
+select count(tag) from (select id,tag,content from cardinality_only_match where match(content) against('alpha beta') limit 3 offset 1) v;
+count(tag)
+2
+select count(tag) from (select tag from cardinality_only_match where match(content) against('alpha beta') limit 3) v;
+count(tag)
+1
+select count(distinct tag) from (select tag from cardinality_only_match where match(content) against('alpha beta') limit 3) v;
+count(distinct tag)
+1
+select sum(id),count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 3) v;
+sum(id)	count(*)
+9	3
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 3) v where id>2;
+count(*)
+1
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 3) v join cardinality_only_match d on d.id=v.id where d.tag is null;
+count(*)
+2
+select tag,count(*) from (select tag from cardinality_only_match where match(content) against('alpha beta') limit 3) v group by tag order by tag;
+tag	count(*)
+NULL	2
+2	1
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') order by id desc limit 3) v;
+count(*)
+3
+select count(*) from (select distinct tag from cardinality_only_match where match(content) against('alpha beta') limit 3) v;
+count(*)
+3
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta')>0.2 limit 3) v;
+count(*)
+3
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') and tag is null limit 3) v;
+count(*)
+3
+select id,round(match(content) against('alpha beta'),12) as score from cardinality_only_match where match(content) against('alpha beta') order by score desc,id limit 3;
+id	score
+1	0.782144973336
+2	0.778334035540
+6	0.395683453237
+set @match_words='alpha beta';
+prepare cardinality_stmt from 'select count(*) from (select id from cardinality_only_match where match(content) against(?) limit ? offset ?) v';
+set @match_limit=3,@match_offset=4;
+execute cardinality_stmt using @match_words,@match_limit,@match_offset;
+count(*)
+2
+set @match_limit=20,@match_offset=0;
+execute cardinality_stmt using @match_words,@match_limit,@match_offset;
+count(*)
+6
+deallocate prepare cardinality_stmt;
+update cardinality_only_match set content='theta' where id=1;
+delete from cardinality_only_match where id=2;
+insert into cardinality_only_match values(9,'alpha beta epsilon',9);
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 100) v;
+count(*)
+5
+select count(*) from (select id from cardinality_only_match where match(content) against('alpha beta') limit 3 offset 4) v;
+count(*)
+1
+drop table cardinality_only_match;

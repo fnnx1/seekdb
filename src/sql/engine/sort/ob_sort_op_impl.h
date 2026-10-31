@@ -427,6 +427,13 @@ public:
   class Compare
   {
   public:
+    enum class KeyCompareKind : uint8_t
+    {
+      ORIGINAL,
+      BINARY_STRING,
+      UTF8_GENERAL_CI_STRING
+    };
+
     Compare();
     int init(const ObIArray<ObSortFieldCollation> *sort_collations,
         const ObIArray<ObSortCmpFunc> *sort_cmp_funs,
@@ -466,6 +473,7 @@ public:
     // for hash_based sort of partition by in window function
     void set_cmp_range(const int64_t cmp_start, const int64_t cmp_end)
     {
+      OB_ASSERT(cmp_start >= 0 && cmp_start <= cmp_end && cmp_end <= cnt_);
       cmp_start_ = cmp_start;
       cmp_end_ = cmp_end;
     }
@@ -481,7 +489,11 @@ public:
     int64_t cmp_start_;
     int64_t cmp_end_;
   private:
+    static const int64_t CACHED_KEY_COUNT = 8;
     int64_t cnt_;
+    const ObSortFieldCollation *collation_data_;
+    const ObSortCmpFunc *cmp_func_data_;
+    KeyCompareKind key_compare_kinds_[CACHED_KEY_COUNT];
     DISALLOW_COPY_AND_ASSIGN(Compare);
   };
 

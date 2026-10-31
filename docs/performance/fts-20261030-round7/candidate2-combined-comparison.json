@@ -1,0 +1,180 @@
+{
+  "scope": "All eight final-candidate measurements, including every slow sample. Local version comparison only.",
+  "samples_removed": 0,
+  "select1_subtracted": false,
+  "series": [
+    "round7-c2-fresh",
+    "round7-c2-confirm"
+  ],
+  "metrics": {
+    "build_ik_all_sec": {
+      "old": [
+        6.732,
+        5.769,
+        5.868,
+        5.868
+      ],
+      "new": [
+        5.667,
+        5.666,
+        7.027,
+        5.665
+      ],
+      "old_mean": 6.0592500000000005,
+      "new_mean": 6.00625,
+      "improvement_percent": 0.8746957131658295,
+      "category": "build"
+    },
+    "build_ik_content_sec": {
+      "old": [
+        4.14,
+        5.095,
+        3.934,
+        4.297
+      ],
+      "new": [
+        4.039,
+        3.937,
+        4.036,
+        4.137
+      ],
+      "old_mean": 4.3665,
+      "new_mean": 4.037249999999999,
+      "improvement_percent": 7.540364136035748,
+      "category": "build"
+    },
+    "build_beng_en_sec": {
+      "old": [
+        2.236,
+        2.335,
+        2.23,
+        3.421
+      ],
+      "new": [
+        2.23,
+        2.234,
+        2.23,
+        2.334
+      ],
+      "old_mean": 2.5555,
+      "new_mean": 2.257,
+      "improvement_percent": 11.680688710624132,
+      "category": "build"
+    },
+    "tokenize_ik_avg_ms": {
+      "old": [
+        0.1357,
+        0.1427,
+        0.1385,
+        0.1573
+      ],
+      "new": [
+        0.1395,
+        0.143,
+        0.1376,
+        0.1574
+      ],
+      "old_mean": 0.14355,
+      "new_mean": 0.144375,
+      "improvement_percent": -0.5747126436781658,
+      "category": "tokenize"
+    },
+    "tokenize_beng_avg_ms": {
+      "old": [
+        0.1059,
+        0.1101,
+        0.1096,
+        0.114
+      ],
+      "new": [
+        0.1096,
+        0.1112,
+        0.1075,
+        0.1123
+      ],
+      "old_mean": 0.1099,
+      "new_mean": 0.11015,
+      "improvement_percent": -0.22747952684258888,
+      "category": "tokenize"
+    },
+    "query_cn_avg_ms": {
+      "old": [
+        0.5005,
+        0.4855,
+        0.4859,
+        0.5111
+      ],
+      "new": [
+        0.4293,
+        0.4243,
+        0.4112,
+        0.4563
+      ],
+      "old_mean": 0.49574999999999997,
+      "new_mean": 0.430275,
+      "improvement_percent": 13.207261724659602,
+      "category": "query"
+    },
+    "query_beng_avg_ms": {
+      "old": [
+        0.6615,
+        0.6461,
+        0.637,
+        0.6542
+      ],
+      "new": [
+        2.1118,
+        0.5473,
+        0.5438,
+        0.5951
+      ],
+      "old_mean": 0.6496999999999999,
+      "new_mean": 0.9495,
+      "improvement_percent": -46.144374326612294,
+      "category": "query"
+    },
+    "query_mixed_avg_ms": {
+      "old": [
+        0.5351,
+        0.5216,
+        0.5064,
+        0.5387
+      ],
+      "new": [
+        0.4686,
+        0.4582,
+        0.465,
+        0.4959
+      ],
+      "old_mean": 0.52545,
+      "new_mean": 0.47192500000000004,
+      "improvement_percent": 10.186506803692064,
+      "category": "query"
+    },
+    "query_limit_avg_ms": {
+      "old": [
+        0.2906,
+        0.2331,
+        0.233,
+        0.2263
+      ],
+      "new": [
+        0.2337,
+        0.2245,
+        0.2201,
+        0.2649
+      ],
+      "old_mean": 0.24575000000000002,
+      "new_mean": 0.2358,
+      "improvement_percent": 4.048830111902346,
+      "category": "query"
+    }
+  },
+  "categories": {
+    "build": 6.698582853275236,
+    "tokenize": -0.4010960852603773,
+    "query": -4.6754439215895705
+  },
+  "mean_category_improvement_percent": 0.5406809488084295,
+  "all_hits_equal": true
+}

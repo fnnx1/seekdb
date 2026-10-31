@@ -133,6 +133,10 @@ public:
   virtual int get_curr_score(double &score) const override;
   virtual int get_curr_id(const ObDatum *&id_datum) const override;
 public:
+  // Consume the remaining buffered IDs as one batch. The view is owned by
+  // this iterator and stays valid until its next read, reuse or reset.
+  // Restricted to score-free consumers that keep their own batch cursor.
+  int get_next_doc_id_batch(const ObDocIdExt *&ids, int64_t &count);
   int get_token_doc_cnt(int64_t &token_doc_cnt) const { return token_iter_->get_token_doc_cnt(token_doc_cnt); }
   virtual int get_dim_max_score(double &score) override {
     int ret = OB_SUCCESS;

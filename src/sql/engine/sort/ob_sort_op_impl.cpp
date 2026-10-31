@@ -28,6 +28,93 @@ using namespace common;
 namespace sql
 {
 
+namespace
+{
+// utf8mb4_general_ci uses upper-case codepoint weights for ASCII and pads
+// shorter strings with spaces. Stop at the first non-ASCII codepoint so the
+// normal comparator continues to handle Unicode weights and invalid UTF-8.
+bool compare_ascii_general_ci(const ObDatum &left, const ObDatum &right, int &cmp)
+{
+  const unsigned char *l = reinterpret_cast<const unsigned char *>(left.ptr_);
+  const unsigned char *r = reinterpret_cast<const unsigned char *>(right.ptr_);
+  const int64_t length = MIN(left.len_, right.len_);
+  for (int64_t i = 0; i < length; ++i) {
+    if (OB_UNLIKELY((l[i] | r[i]) >= 0x80)) {
+      return false;
+    }
+    const unsigned char lc = l[i] >= 'a' && l[i] <= 'z' ? l[i] - ('a' - 'A') : l[i];
+    const unsigned char rc = r[i] >= 'a' && r[i] <= 'z' ? r[i] - ('a' - 'A') : r[i];
+    if (lc != rc) {
+      cmp = lc < rc ? -1 : 1;
+      return true;
+    }
+  }
+  const unsigned char *tail = left.len_ > right.len_ ? l : r;
+  const int64_t end = MAX(left.len_, right.len_);
+  const int sign = left.len_ > right.len_ ? 1 : -1;
+  for (int64_t i = length; i < end; ++i) {
+    if (tail[i] != ' ') {
+      if (OB_UNLIKELY(tail[i] >= 0x80)) {
+        return false;
+      }
+      cmp = tail[i] < ' ' ? -sign : sign;
+      return true;
+    }
+  }
+  cmp = 0;
+  return true;
+}
+
+using KeyCompareKind = ObSortOpImpl::Compare::KeyCompareKind;
+
+// Match the function itself, not just the collation: LOB locators, other data
+// types and other comparison rules must keep their original implementation.
+KeyCompareKind classify_sort_key(const ObDatumCmpFuncType cmp_func)
+{
+  static const ObDatumBasicFuncs *binary = ObDatumFuncs::get_basic_func(ObVarcharType, CS_TYPE_BINARY);
+  static const ObDatumBasicFuncs *utf8 = ObDatumFuncs::get_basic_func(ObVarcharType, CS_TYPE_UTF8MB4_GENERAL_CI);
+  return cmp_func == binary->null_first_cmp_ || cmp_func == binary->null_last_cmp_
+      ? KeyCompareKind::BINARY_STRING
+      : cmp_func == utf8->null_first_cmp_ || cmp_func == utf8->null_last_cmp_
+      ? KeyCompareKind::UTF8_GENERAL_CI_STRING : KeyCompareKind::ORIGINAL;
+}
+
+// Repeated fulltext words are often byte-identical. Avoid decoding the same
+// UTF-8 word on every sort comparison. The kind is cached by Compare::init for
+// common short key lists; longer lists retain the same classification fallback.
+int compare_repeated_sort_key(const ObDatum &left, const ObDatum &right,
+                             const ObDatumCmpFuncType cmp_func, const KeyCompareKind kind,
+                             int &cmp, const ObDatumAccessContext *access_ctx)
+{
+  if (kind == KeyCompareKind::ORIGINAL || left.is_null() || right.is_null()
+      || left.is_ext() || right.is_ext()) {
+    return cmp_func(left, right, cmp, access_ctx);
+  } else if (kind == KeyCompareKind::BINARY_STRING) {
+    // Constant-sized byte comparisons can inline for common document IDs.
+    // Keep byte order and permit unaligned input; never compare native words.
+    if (left.len_ == 2 * sizeof(uint64_t) && right.len_ == 2 * sizeof(uint64_t)) {
+      cmp = MEMCMP(left.ptr_, right.ptr_, 2 * sizeof(uint64_t));
+    } else if (left.len_ == sizeof(uint64_t) && right.len_ == sizeof(uint64_t)) {
+      cmp = MEMCMP(left.ptr_, right.ptr_, sizeof(uint64_t));
+    } else {
+      const int64_t length = MIN(left.len_, right.len_);
+      const int bytes = length == 0 ? 0 : MEMCMP(left.ptr_, right.ptr_, length);
+      cmp = bytes != 0 ? bytes : (left.len_ < right.len_ ? -1 : left.len_ > right.len_ ? 1 : 0);
+    }
+  } else if (kind == KeyCompareKind::UTF8_GENERAL_CI_STRING) {
+    if (left.len_ == right.len_
+        && (left.len_ == 0 || 0 == MEMCMP(left.ptr_, right.ptr_, left.len_))) {
+      cmp = 0;
+    } else if (!compare_ascii_general_ci(left, right, cmp)) {
+      return cmp_func(left, right, cmp, access_ctx);
+    }
+  } else {
+    return cmp_func(left, right, cmp, access_ctx);
+  }
+  return OB_SUCCESS;
+}
+} // namespace
+
 /************************************* start ObSortOpImpl *********************************/
 ObSortOpImpl::ObAdaptiveQS::ObAdaptiveQS(common::ObIArray<ObChunkDatumStore::StoredRow *> &sort_rows,
                                          common::ObIAllocator &alloc)
@@ -356,7 +443,9 @@ int ObSortOpImpl::ObAdaptiveQS::compare_vals(int64_t l, int64_t r,
 
 ObSortOpImpl::Compare::Compare()
   : ret_(OB_SUCCESS), sort_collations_(nullptr), sort_cmp_funs_(nullptr),
-    exec_ctx_(nullptr), access_ctx_(nullptr), cmp_count_(0), cmp_start_(0), cmp_end_(0)
+    exec_ctx_(nullptr), access_ctx_(nullptr), enable_encode_sortkey_(false),
+    cmp_count_(0), cmp_start_(0), cmp_end_(0), cnt_(0), collation_data_(nullptr),
+    cmp_func_data_(nullptr), key_compare_kinds_{}
 {
 }
 
@@ -369,7 +458,7 @@ int ObSortOpImpl::Compare::init(
   int ret = OB_SUCCESS;
   if (nullptr == sort_collations || nullptr == sort_cmp_funs || nullptr == exec_ctx) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (sort_cmp_funs->count() != sort_cmp_funs->count()) {
+  } else if (sort_collations->count() != sort_cmp_funs->count()) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(exec_ctx->get_datum_access_ctx(access_ctx_))) {
   } else {
@@ -380,6 +469,13 @@ int ObSortOpImpl::Compare::init(
     cmp_start_ = 0;
     cmp_end_ = sort_cmp_funs_->count();
     enable_encode_sortkey_ = enable_encode_sortkey;
+    collation_data_ = sort_collations_->get_data();
+    cmp_func_data_ = sort_cmp_funs_->get_data();
+    // The immutable plan arrays also back prefix-sort views. Initialize the
+    // cache even for encoded sort, which can fall back to row comparisons.
+    for (int64_t i = 0; i < cnt_ && i < CACHED_KEY_COUNT; ++i) {
+      key_compare_kinds_[i] = classify_sort_key(cmp_func_data_[i].cmp_func_);
+    }
   }
   return ret;
 }
@@ -416,12 +512,17 @@ bool ObSortOpImpl::Compare::operator()(
   } else {
     const ObDatum *lcells = l->cells();
     const ObDatum *rcells = r->cells();
+    const ObSortFieldCollation *collations = collation_data_;
+    const ObSortCmpFunc *cmp_funcs = cmp_func_data_;
     int cmp = 0;
     for (int64_t i = cmp_start_; 0 == cmp && i < cmp_end_ && OB_SUCC(ret); i++) {
-      const ObSortFieldCollation& sort_collation = sort_collations_->at(i);
+      const ObSortFieldCollation& sort_collation = collations[i];
       const int64_t idx = sort_collation.field_idx_;
+      const KeyCompareKind kind = i < CACHED_KEY_COUNT
+          ? key_compare_kinds_[i] : classify_sort_key(cmp_funcs[i].cmp_func_);
       if (OB_FAIL(
-              sort_cmp_funs_->at(i).cmp_func_(lcells[idx], rcells[idx], cmp, access_ctx_))) {
+              compare_repeated_sort_key(lcells[idx], rcells[idx],
+                                        cmp_funcs[i].cmp_func_, kind, cmp, access_ctx_))) {
       } else if (cmp < 0) {
         less = sort_collation.is_ascending_;
       } else if (cmp > 0) {

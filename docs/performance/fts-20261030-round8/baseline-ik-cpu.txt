@@ -1,0 +1,34 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 2K of event 'cpu-clock:u'
+# Event count (approx.): 5627254464
+#
+# Overhead  Command        Shared Object           Symbol
+# ........  .............  ......................  .....................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     5.84%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::storage::ObFTDATReader<void>::match_with_hit(oceanbase::common::ObString const&, oceanbase::storage::ObDATrieHit const&, oceanbase::storage::ObDATrieHit&) const
+     4.74%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::storage::ObArrayHashMap::find(oceanbase::storage::ObFTSingleWord const&, int&) const
+     2.24%  ReqWorker      libc.so.6               [.] __memcmp_avx2_movbe
+     1.53%  ReqWorker      libc.so.6               [.] __memmove_avx_unaligned_erms
+     1.35%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::storage::ObAddWord::groupby_word(oceanbase::storage::ObFTWord const&, long)
+     1.21%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::storage::ObIKCJKProcessor::do_process(oceanbase::storage::TokenizeContext&, char const*, unsigned char, oceanbase::storage::ObFTCharUtil::CharType)
+     1.10%  ReqWorker      libc.so.6               [.] __strlen_avx2
+     1.10%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::common::ObArenaAllocator::alloc(long, oceanbase::lib::ObMemAttr const&)
+     1.07%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::common::ObCharset::is_argument_valid(oceanbase::common::ObCollationType const&, char const*, long, char const*, long)
+     1.07%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::common::PageArena<char, oceanbase::common::ModulePageAllocator>::_alloc_aligned(long, long)
+     1.00%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::common::ObCharset::get_charset(oceanbase::common::ObCollationType)
+     0.96%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::common::ObCharset::strcmp(oceanbase::common::ObCollationType, oceanbase::common::ObString const&, oceanbase::common::ObString const&)
+     0.93%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::storage::ObFTRangeDict::find_first_char_range(oceanbase::common::ObString const&, oceanbase::storage::ObIFTDict*&) const
+     0.82%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::storage::ObIKArbitrator::output_result(oceanbase::storage::TokenizeContext&)
+     0.78%  ReqWorker      seekdb-round8-baseline  [.] ob_casedn_utf8mb4(ObCharsetInfo const*, char*, unsigned long, char*, unsigned long)
+     0.78%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::common::obvectorutil::ObVsagLogger::Trace(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+     0.75%  ReqWorker      seekdb-round8-baseline  [.] oceanbase::observer::ObMPQuery::process_single_stmt(oceanbase::sql::ObMultiStmtItem const&, oceanbase::observer::ObSMConnection*, oceanbase::sql::ObSQLSessionInfo&, bool, bool, bool&, bool&)
+     0.71%  ReqWorker      libc.so.6               [.] printf_positional
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

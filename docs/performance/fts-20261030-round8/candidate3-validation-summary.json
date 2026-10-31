@@ -1,0 +1,22 @@
+{
+  "differential_groups": 17,
+  "differential_sql": 463,
+  "native_mysqltest": 21,
+  "full_result_sets": 18,
+  "full_result_rows": 27851,
+  "full_scored_rows": 27665,
+  "bmw_queries": 88,
+  "bmw_rows": 155947,
+  "bmw_errors": 4,
+  "concurrent_tokenize": 3120,
+  "cold_loader": {
+    "workers": 8,
+    "checks": 328,
+    "failures": 0,
+    "reference_equal": true
+  },
+  "tokenize_exact": 720,
+  "expanded_tokenize_exact": 7200,
+  "source_files_checked": 6669,
+  "overlay_files_checked": 5
+}

@@ -781,12 +781,34 @@ int ObStaticEngineCG::generate_spec_final(ObLogicalOperator &op, ObOpSpec &spec)
 
   if (PHY_TABLE_SCAN == spec.type_ || IS_SAMPLE_SCAN(spec.type_)) {
     ObTableScanSpec &tsc_spec = static_cast<ObTableScanSpec&>(spec);
+    if (tsc_spec.is_fts_ddl_ && spec.is_vectorized()) {
+      // FTS expansion batches contain only the four materialized auxiliary-table
+      // columns. Keep other projections/filters on the established scalar path.
+      const int64_t word_idx = tsc_spec.is_fts_index_aux_ ? 0 : 1;
+      bool can_batch_fts = spec.output_.count() == 4 && spec.filters_.empty();
+      for (int64_t i = 0; can_batch_fts && i < spec.output_.count(); ++i) {
+        can_batch_fts = nullptr != spec.output_.at(i) && spec.output_.at(i)->is_batch_result();
+      }
+      if (can_batch_fts) {
+        can_batch_fts = spec.output_.at(word_idx)->type_ == T_FUN_SYS_WORD_SEGMENT
+            && spec.output_.at(2)->type_ == T_FUN_SYS_WORD_COUNT
+            && spec.output_.at(3)->type_ == T_FUN_SYS_DOC_LENGTH;
+      }
+      if (!can_batch_fts) {
+        tsc_spec.max_batch_size_ = 0;
+      }
+    }
     ObDASScanCtDef &scan_ctdef = tsc_spec.tsc_ctdef_.scan_ctdef_;
     ObDASScanCtDef *lookup_ctdef = tsc_spec.tsc_ctdef_.lookup_ctdef_;
-    if (OB_FAIL(scan_ctdef.pd_expr_spec_.set_calc_exprs(spec.calc_exprs_, tsc_spec.max_batch_size_))) {
+    // FTS batches expand one source document at a time. The underlying DAS
+    // scans (including the attached doc-id lookup) still use get_next_row().
+    // Enabling storage vectorization here makes an SSTable scanner repeatedly
+    // request a switch to get_next_rows(), which that scalar caller cannot do.
+    const int64_t das_batch_size = tsc_spec.is_fts_ddl_ ? 0 : tsc_spec.max_batch_size_;
+    if (OB_FAIL(scan_ctdef.pd_expr_spec_.set_calc_exprs(spec.calc_exprs_, das_batch_size))) {
     } else if (lookup_ctdef != nullptr &&
-        OB_FAIL(lookup_ctdef->pd_expr_spec_.set_calc_exprs(spec.calc_exprs_, tsc_spec.max_batch_size_))) {
-    } else if (OB_FAIL(tsc_spec.tsc_ctdef_.attach_spec_.set_calc_exprs(spec.calc_exprs_, tsc_spec.max_batch_size_))) {
+        OB_FAIL(lookup_ctdef->pd_expr_spec_.set_calc_exprs(spec.calc_exprs_, das_batch_size))) {
+    } else if (OB_FAIL(tsc_spec.tsc_ctdef_.attach_spec_.set_calc_exprs(spec.calc_exprs_, das_batch_size))) {
     }
   }
 
@@ -3681,7 +3703,8 @@ int ObStaticEngineCG::generate_normal_tsc(ObLogTableScan &op, ObTableScanSpec &s
       } else if (ddl_table_schema->is_fts_index_aux() || ddl_table_schema->is_fts_doc_word_aux()) {
         spec.is_fts_ddl_ = true;
         spec.is_fts_index_aux_ = ddl_table_schema->is_fts_index_aux();
-        spec.max_batch_size_ = 0; // TODO: @jinzhu, remove me later after support post-building fts index vectorization.
+        // generate_spec_final validates the four-column batch projection once
+        // runtime output expressions have been generated.
         if (OB_UNLIKELY(ddl_table_schema->get_parser_name_str().empty())) {
           ret = OB_ERR_UNEXPECTED;
         } else {

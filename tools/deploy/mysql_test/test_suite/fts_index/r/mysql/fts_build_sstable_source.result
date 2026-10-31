@@ -1,0 +1,52 @@
+SET NAMES utf8mb4;
+DROP TABLE IF EXISTS fts_batch_sstable_docs;
+DROP TABLE IF EXISTS fts_batch_sstable_digits;
+CREATE TABLE fts_batch_sstable_digits(n INT PRIMARY KEY);
+INSERT INTO fts_batch_sstable_digits VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE fts_batch_sstable_docs(id INT, title VARCHAR(128), content TEXT) AS SELECT a.n*100+b.n*10+c.n AS id, CONCAT('database search ',CHAR(97+a.n)) AS title, CASE WHEN c.n=0 THEN NULL WHEN c.n=1 THEN '' ELSE CONCAT('alpha beta gamma database search index token ',CHAR(97+b.n),' 数据库 全文 检索') END AS content FROM fts_batch_sstable_digits a CROSS JOIN fts_batch_sstable_digits b CROSS JOIN fts_batch_sstable_digits c;
+ALTER TABLE fts_batch_sstable_docs ADD PRIMARY KEY(id);
+SELECT COUNT(*) AS source_documents FROM fts_batch_sstable_docs;
+source_documents
+1000
+ALTER TABLE fts_batch_sstable_docs ADD FULLTEXT INDEX ft_all(title,content) WITH PARSER ik;
+ALTER TABLE fts_batch_sstable_docs ADD FULLTEXT INDEX ft_content(content) WITH PARSER beng;
+SELECT COUNT(*) AS all_documents FROM fts_batch_sstable_docs WHERE MATCH(title,content) AGAINST('database');
+all_documents
+1000
+SELECT COUNT(*) AS content_documents FROM fts_batch_sstable_docs WHERE MATCH(content) AGAINST('alpha');
+content_documents
+800
+SELECT id,ROUND(MATCH(title,content) AGAINST('database alpha'),10) AS score FROM fts_batch_sstable_docs WHERE id<10 AND MATCH(title,content) AGAINST('database alpha') ORDER BY id;
+id	score
+0	0.3597560976
+1	0.3597560976
+2	0.5589065144
+3	0.5589065144
+4	0.5589065144
+5	0.5589065144
+6	0.5589065144
+7	0.5589065144
+8	0.5589065144
+9	0.5589065144
+UPDATE fts_batch_sstable_docs SET content='alpha delta' WHERE id=0;
+DELETE FROM fts_batch_sstable_docs WHERE id=2;
+SELECT COUNT(*) AS content_documents_after_dml FROM fts_batch_sstable_docs WHERE MATCH(content) AGAINST('alpha');
+content_documents_after_dml
+800
+ALTER TABLE fts_batch_sstable_docs DROP INDEX ft_all;
+ALTER TABLE fts_batch_sstable_docs ADD FULLTEXT INDEX ft_all(title,content) WITH PARSER ik;
+SELECT COUNT(*) AS all_documents_rebuilt FROM fts_batch_sstable_docs WHERE MATCH(title,content) AGAINST('database');
+all_documents_rebuilt
+999
+SELECT id FROM fts_batch_sstable_docs WHERE id<10 AND MATCH(title,content) AGAINST('alpha') ORDER BY id;
+id
+0
+3
+4
+5
+6
+7
+8
+9
+DROP TABLE fts_batch_sstable_docs;
+DROP TABLE fts_batch_sstable_digits;

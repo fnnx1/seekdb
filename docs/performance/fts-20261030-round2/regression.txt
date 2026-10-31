@@ -1,0 +1,136 @@
+1 OK 0 DROP TABLE IF EXISTS binary_ids;
+2 OK 0 CREATE TABLE binary_ids(id VARBINARY(32) PRIMARY KEY, content TEXT, FULLTEXT INDEX ft(content) WITH
+3 OK 0 INSERT INTO binary_ids VALUES
+4 OK 13 SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') ORDER BY id;
+5 OK 13 SELECT HEX(id), MATCH(content) AGAINST('alpha beta gamma') AS score FROM binary_ids WHERE MATCH(cont
+6 OK 5 SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 5;
+7 OK 3 SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 3 OFFSET 4;
+8 OK 13 SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 20;
+9 OK 13 SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta gamma') > 0.15 ORDER BY id;
+10 OK 5 SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('+alpha -gamma' IN BOOLEAN MODE) ORDER B
+11 OK 13 SELECT /*+ ROWSETS_MAX_ROWS(0) */ HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta')
+12 OK 13 SELECT /*+ ROWSETS_MAX_ROWS(1) */ HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha beta')
+13 OK 0 UPDATE binary_ids SET content='delta alpha' WHERE id=X'6100';
+14 OK 0 DELETE FROM binary_ids WHERE id=X'20';
+15 OK 0 INSERT INTO binary_ids VALUES(X'2000','alpha gamma');
+16 OK 7 SELECT HEX(id) FROM binary_ids WHERE MATCH(content) AGAINST('alpha gamma') LIMIT 7;
+17 OK 13 SELECT HEX(id), MATCH(content) AGAINST('alpha gamma') AS score FROM binary_ids WHERE MATCH(content)
+18 OK 0 DROP TABLE binary_ids;
+PASS: all statements exactly match the baseline
+1 OK 0 drop table if exists fts_predicate_only;
+2 OK 0 create table fts_predicate_only(id int primary key, content text,
+3 OK 0 insert into fts_predicate_only values
+4 OK 4 select id from fts_predicate_only where match(content) against('alpha beta') order by id;
+5 OK 1 select count(*) as hits from fts_predicate_only where match(content) against('alpha beta');
+6 OK 4 select /*+ opt_param('ROWSETS_MAX_ROWS', 0) */ id from fts_predicate_only
+7 OK 4 select /*+ opt_param('ROWSETS_MAX_ROWS', 1) */ id from fts_predicate_only
+8 OK 4 select /*+ opt_param('ROWSETS_MAX_ROWS', 32) */ id from fts_predicate_only
+9 OK 4 select id from fts_predicate_only where match(content) against('alpha beta') > 0 order by id;
+10 OK 4 select id from fts_predicate_only where match(content) against('alpha alpha beta') order by id;
+11 OK 2 select id from fts_predicate_only where match(content) against('alpha beta') and id > 2 order by id;
+12 OK 2 select id from fts_predicate_only where match(content) against('alpha beta') order by id limit 2 off
+13 OK 1 select count(*) as limited_hits from
+14 OK 4 select id, round(match(content) against('alpha beta'), 6) as score
+15 OK 3 select id from fts_predicate_only where match(content) against('alpha beta')
+16 OK 4 select id from fts_predicate_only where match(content) against('alpha beta') > 0.5 order by id;
+17 OK 1 select count(*) as no_hits from fts_predicate_only where match(content) against('nonexistentword');
+18 OK 1 select count(*) as empty_hits from fts_predicate_only where match(content) against('');
+19 OK 1 select count(*) as null_hits from fts_predicate_only where match(content) against(null);
+20 OK 2 select id from fts_predicate_only where match(content) against('+alpha -delta' in boolean mode) orde
+21 OK 6 select id from fts_predicate_only where match(content) against('alpha beta')
+22 OK 3 select id from fts_predicate_only force index(primary)
+23 OK 0 prepare fts_threshold from 'select id from fts_predicate_only where match(content) against(?) > ? or
+24 OK 0 set @fts_words='alpha beta', @fts_threshold=0;
+25 OK 4 execute fts_threshold using @fts_words, @fts_threshold;
+26 OK 0 set @fts_threshold=0.5;
+27 OK 4 execute fts_threshold using @fts_words, @fts_threshold;
+28 OK 0 deallocate prepare fts_threshold;
+29 OK 0 prepare fts_presence from 'select id from fts_predicate_only where match(content) against(?) order b
+30 OK 0 set @fts_words='alpha beta';
+31 OK 4 execute fts_presence using @fts_words;
+32 OK 0 set @fts_words='nonexistentword';
+33 OK 0 execute fts_presence using @fts_words;
+34 OK 0 set @fts_words=null;
+35 OK 0 execute fts_presence using @fts_words;
+36 OK 0 set @fts_words='delta';
+37 OK 3 execute fts_presence using @fts_words;
+38 OK 0 deallocate prepare fts_presence;
+39 OK 0 update fts_predicate_only set content='omega' where id=1;
+40 OK 0 delete from fts_predicate_only where id=2;
+41 OK 2 select id from fts_predicate_only where match(content) against('alpha beta') order by id;
+42 OK 0 insert into fts_predicate_only values(11,'term000 term001'),(12,'term299 term000');
+43 OK 2 select id from fts_predicate_only where match(content) against('term000 term001 term002 term003 term
+44 OK 0 drop table fts_predicate_only;
+PASS: all statements exactly match the baseline
+1 OK 0 set names utf8mb4;
+2 OK 1 select tokenize(null, 'beng');
+3 OK 1 select tokenize('', 'ik');
+4 OK 1 select tokenize('the and a is an of to', 'beng');
+5 OK 1 select tokenize('Alpha alpha ALPHA beta beta gamma', 'beng');
+6 OK 1 select tokenize('Alpha alpha ALPHA beta beta gamma', 'beng', '[{"output":"all"}]');
+7 OK 1 select tokenize('中文分词 中文分词 数据库 数据库 OceanBase oceanbase', 'ik');
+8 OK 1 select tokenize('中文分词 中文分词 数据库 数据库 OceanBase oceanbase', 'ik', '[{"output":"all"}]');
+9 OK 1 select tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]'
+10 OK 1 select tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"
+11 OK 1 select tokenize('hello hello World 世界 世界 123 123', 'space', '[{"output":"all"}]');
+12 OK 1 select tokenize('hello hello World 世界 世界', 'ngram', '[{"output":"all"}]');
+13 OK 1 select tokenize('一二三四五 六七八', 'ngram2', '[{"additional_args":[{"min_ngram_size":2},{"max_ngram_size":
+14 OK 1 select tokenize('hello world abcdefghijklmnopqrstuvwxyz', 'space', '[{"output":"all"},{"additional_a
+15 OK 0 drop table if exists fts_local_tokens;
+16 OK 0 create table fts_local_tokens(content text, fulltext index ft(content) with parser beng);
+17 OK 0 insert into fts_local_tokens values ('alpha beta gamma'),('beta delta'),('ALPHA alpha'),('empty toke
+18 OK 3 select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+19 OK 3 select content from fts_local_tokens where match(content) against('alpha beta gamma delta epsilon ze
+20 OK 3 select content from fts_local_tokens where match(content) against('alpha beta gamma delta epsilon ze
+21 OK 3 select /*+ opt_param('ROWSETS_MAX_ROWS', 1) */ content from fts_local_tokens where match(content) ag
+22 OK 0 update fts_local_tokens set content='gamma gamma' where content='ALPHA alpha';
+23 OK 2 select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+24 OK 0 delete from fts_local_tokens where content='beta delta';
+25 OK 1 select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+26 OK 0 drop table fts_local_tokens;
+PASS: all statements exactly match the baseline
+1 OK 0 SET NAMES utf8mb4;
+2 OK 0 DROP TABLE IF EXISTS fts_sort_keys;
+3 OK 0 DROP TABLE IF EXISTS fts_key_digits;
+4 OK 0 CREATE TABLE fts_key_digits(n INT PRIMARY KEY);
+5 OK 0 INSERT INTO fts_key_digits VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+6 OK 0 CREATE TABLE fts_sort_keys(id INT PRIMARY KEY, v VARCHAR(64) COLLATE utf8mb4_general_ci, b VARBINARY
+7 OK 0 INSERT INTO fts_sort_keys SELECT a.n*100+b.n*10+c.n,
+8 OK 1000 SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'false') */ id, HEX(v), HEX(b) FROM fts_sort_keys ORDER BY v,
+9 OK 1000 SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'false') */ id, HEX(v) FROM fts_sort_keys ORDER BY v DESC, id
+10 OK 1000 SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'false') */ id FROM fts_sort_keys ORDER BY b DESC;
+11 OK 30 SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta') LIMIT 30;
+12 OK 20 SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 20 OFFSET 5;
+13 OK 1 SELECT COUNT(*) FROM (SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta gamma')
+14 OK 20 SELECT MATCH(content) AGAINST('alpha beta gamma') AS score FROM fts_sort_keys WHERE MATCH(content) A
+15 OK 1 SELECT COUNT(*) FROM (SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta') LIMIT
+16 OK 1 SELECT COUNT(*) FROM (SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta') LIMIT
+17 OK 1 SELECT COUNT(*) FROM (SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('absent') LIMIT 20)
+18 OK 35 SELECT id, MATCH(content) AGAINST('alpha beta gamma') AS score FROM fts_sort_keys WHERE MATCH(conten
+19 OK 25 SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('+alpha -delta' IN BOOLEAN MODE) ORDER BY
+20 OK 0 UPDATE fts_sort_keys SET content='gamma gamma alpha' WHERE id BETWEEN 900 AND 949;
+21 OK 0 DELETE FROM fts_sort_keys WHERE id>=975;
+22 OK 30 SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha gamma') LIMIT 30;
+23 OK 0 DROP TABLE fts_sort_keys;
+24 OK 0 DROP TABLE fts_key_digits;
+PASS: all statements exactly match the baseline
+en 11000 07e2d35f0335df24db80983c3436f5c75974e230814027625d05a62ee92fefb1
+en_top20 20 3344ea52a2a298f08ce0de2e96eb7ed01fc8e38a4e667cc33ee65e9cf495e9a7
+en_implicit20 20 893759f74489fedf735de5f211e2d18e76978b48da8da01ce9545439ac004333
+en_scores20 20 a0ea307cf992c76ef1174f16751e92ebf62b819e678e48d36964586ea1ceeb08
+en_count20 1 1675c080b14a0fcef91100365cc45a596962eee489f201b75fc29a17798f3dba
+en_count_offset 1 1675c080b14a0fcef91100365cc45a596962eee489f201b75fc29a17798f3dba
+mixed 7332 39ed5744d90bf4582c716f8b3f1e91019bc31a6fab86aca5f16c3bc56b8476ad
+mixed_top20 20 206f16ad2bb52443be8a3b4b902b73f902092430decb82090e27c090252df397
+mixed_implicit20 20 53571bd86072000c4aadf99576a01fe76028aff578c2165716cf5d2544823b75
+mixed_scores20 20 e7d1d2fcfe19bc982af594c87e46091471836547968bf4c5c3a6a54035484407
+mixed_count20 1 1675c080b14a0fcef91100365cc45a596962eee489f201b75fc29a17798f3dba
+mixed_count_offset 1 9e0edf6af4d1e362ce1cf70e48f6060b923fa75e778e72b6051a3e65c1fc89d9
+content 9333 0c36df194eccbf4b6b5156aaf8aac48fd8df5be20153db73e04f15b0d3449e4a
+content_top20 20 4d33dc306cbf39428a8a0e0754bc176da8794af8cb6128ca6a70f7859145f7ea
+content_implicit20 20 d0b5491b5b37ba23eed23297dd0d6ad3925508669c0fd8233a831e734355616e
+content_scores20 20 849d993d08c149089def7166d91e2f5001f2d7e95d43d8278bc16b796d00f5c4
+content_count20 1 1675c080b14a0fcef91100365cc45a596962eee489f201b75fc29a17798f3dba
+content_count_offset 1 1675c080b14a0fcef91100365cc45a596962eee489f201b75fc29a17798f3dba
+PASS: all unrounded scores, explicit order and implicit top-20 IDs exactly match
+{"sessions": 8, "checked": 3120, "status": "PASS", "per_session": [390, 390, 390, 390, 390, 390, 390, 390]}

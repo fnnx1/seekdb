@@ -1,0 +1,73 @@
+set names utf8mb4;
+select tokenize(null, 'beng');
+tokenize(null, 'beng')
+[]
+select tokenize('', 'ik');
+tokenize('', 'ik')
+[]
+select tokenize('the and a is an of to', 'beng');
+tokenize('the and a is an of to', 'beng')
+["and"]
+select tokenize('Alpha alpha ALPHA beta beta gamma', 'beng');
+tokenize('Alpha alpha ALPHA beta beta gamma', 'beng')
+["gamma", "alpha", "beta"]
+select tokenize('Alpha alpha ALPHA beta beta gamma', 'beng', '[{"output":"all"}]');
+tokenize('Alpha alpha ALPHA beta beta gamma', 'beng', '[{"output":"all"}]')
+{"tokens": [{"gamma": 1}, {"alpha": 3}, {"beta": 2}], "doc_len": 6}
+select tokenize('中文分词 中文分词 数据库 数据库 OceanBase oceanbase', 'ik');
+tokenize('中文分词 中文分词 数据库 数据库 OceanBase oceanbase', 'ik')
+["oceanbase", "分词", "数据库", "中文"]
+select tokenize('中文分词 中文分词 数据库 数据库 OceanBase oceanbase', 'ik', '[{"output":"all"}]');
+tokenize('中文分词 中文分词 数据库 数据库 OceanBase oceanbase', 'ik', '[{"output":"all"}]')
+{"tokens": [{"oceanbase": 2}, {"分词": 2}, {"数据库": 2}, {"中文": 2}], "doc_len": 8}
+select tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]')
+{"tokens": [{"人民大会堂": 1}, {"中华人民共和国": 1}], "doc_len": 2}
+select tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+tokenize('中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]')
+{"tokens": [{"大会": 1}, {"人民大会堂": 1}, {"大会堂": 1}, {"共和国": 1}, {"人民大会": 1}, {"人民共和国": 1}, {"中华人民": 1}, {"共和": 1}, {"会堂": 1}, {"中华": 1}, {"中华人民共和国": 1}, {"国人": 1}, {"华人": 1}, {"人民": 2}], "doc_len": 15}
+select tokenize('hello hello World 世界 世界 123 123', 'space', '[{"output":"all"}]');
+tokenize('hello hello World 世界 世界 123 123', 'space', '[{"output":"all"}]')
+{"tokens": [{"123": 2}, {"world": 1}, {"hello": 2}], "doc_len": 5}
+select tokenize('hello hello World 世界 世界', 'ngram', '[{"output":"all"}]');
+tokenize('hello hello World 世界 世界', 'ngram', '[{"output":"all"}]')
+{"tokens": [{"lo": 2}, {"he": 2}, {"ll": 2}, {"世界": 2}, {"or": 1}, {"rl": 1}, {"wo": 1}, {"ld": 1}, {"el": 2}], "doc_len": 14}
+select tokenize('一二三四五 六七八', 'ngram2', '[{"additional_args":[{"min_ngram_size":2},{"max_ngram_size":4}]},{"output":"all"}]');
+tokenize('一二三四五 六七八', 'ngram2', '[{"additional_args":[{"min_ngram_size":2},{"max_ngram_size":4}]},{"output":"all"}]')
+{"tokens": [{"二三四五": 1}, {"一二三": 1}, {"三四": 1}, {"三四五": 1}, {"七八": 1}, {"六七八": 1}, {"六七": 1}, {"二三": 1}, {"一二": 1}, {"四五": 1}, {"一二三四": 1}, {"二三四": 1}], "doc_len": 12}
+select tokenize('hello world abcdefghijklmnopqrstuvwxyz', 'space', '[{"output":"all"},{"additional_args":[{"min_token_size":5},{"max_token_size":10}]}]');
+tokenize('hello world abcdefghijklmnopqrstuvwxyz', 'space', '[{"output":"all"},{"additional_args":[{"min_token_size":5},{"max_token_size":10}]}]')
+{"tokens": [{"world": 1}, {"hello": 1}], "doc_len": 2}
+drop table if exists fts_local_tokens;
+create table fts_local_tokens(content text, fulltext index ft(content) with parser beng);
+insert into fts_local_tokens values ('alpha beta gamma'),('beta delta'),('ALPHA alpha'),('empty token'),(null),('');
+select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+content
+ALPHA alpha
+alpha beta gamma
+beta delta
+select content from fts_local_tokens where match(content) against('alpha beta gamma delta epsilon zeta theta omega') order by content;
+content
+ALPHA alpha
+alpha beta gamma
+beta delta
+select content from fts_local_tokens where match(content) against('alpha beta gamma delta epsilon zeta theta omega lambda') order by content;
+content
+ALPHA alpha
+alpha beta gamma
+beta delta
+select /*+ opt_param('ROWSETS_MAX_ROWS', 1) */ content from fts_local_tokens where match(content) against('alpha beta') order by content;
+content
+ALPHA alpha
+alpha beta gamma
+beta delta
+update fts_local_tokens set content='gamma gamma' where content='ALPHA alpha';
+select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+content
+alpha beta gamma
+beta delta
+delete from fts_local_tokens where content='beta delta';
+select content from fts_local_tokens where match(content) against('alpha beta') order by content;
+content
+alpha beta gamma
+drop table fts_local_tokens;

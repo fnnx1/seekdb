@@ -1662,6 +1662,10 @@ int ObTableScanOp::inner_rescan_for_tsc()
   input_row_cnt_ = 0;
   output_row_cnt_ = 0;
   iter_end_ = false;
+  if (MY_SPEC.is_fts_ddl_) {
+    // A sample-to-full-scan transition or GI rescan starts a new document stream.
+    fts_index_.reuse();
+  }
   MY_INPUT.key_ranges_.reuse();
   MY_INPUT.mbr_filters_.reuse();
   bool need_real_rescan = false;
@@ -2199,7 +2203,10 @@ ERRSIM_POINT_DEF(EN_TABLE_SCAN_RETRY_WAIT_EVENT_ERRSIM);
 int ObTableScanOp::inner_get_next_batch(const int64_t max_row_cnt)
 {
   int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(rand_scan_processor_.use_rand_scan())) {
+  if (OB_UNLIKELY(MY_SPEC.is_fts_ddl_)) {
+    if (OB_FAIL(inner_get_next_fts_index_batch(max_row_cnt))) {
+    }
+  } else if (OB_UNLIKELY(rand_scan_processor_.use_rand_scan())) {
     if (OB_FAIL(rand_scan_processor_.inner_get_next_batch(max_row_cnt))) {
     }
   } else if (OB_FAIL(inner_get_next_batch_for_tsc(max_row_cnt))) {
@@ -3620,6 +3627,92 @@ int ObTableScanOp::fill_generated_cellid_mbr(
         eval_info->projected_ = true;
       }
     }
+  }
+  return ret;
+}
+
+int ObTableScanOp::inner_get_next_fts_index_batch(const int64_t max_row_cnt)
+{
+  int ret = OB_SUCCESS;
+  ObEvalCtx::BatchInfoScopeGuard guard(eval_ctx_);
+  guard.set_batch_size(1);
+  guard.set_batch_idx(0);
+  clear_evaluated_flag();
+  brs_.size_ = 0;
+  brs_.end_ = false;
+  const int64_t capacity = min(max_row_cnt, MY_SPEC.max_batch_size_);
+  if (OB_UNLIKELY(capacity <= 0 || MY_SPEC.output_.count() != 4)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (nullptr != tsc_rtdef_.scan_rtdef_.sample_info_) {
+    // Sampling observes original document rows, before the FTS word expansion.
+    // Retain the existing scalar source scan and its checksum/LOB bookkeeping.
+    if (OB_FAIL(inner_get_next_row_implement())) {
+      if (OB_ITER_END == ret) {
+        brs_.end_ = true;
+        ret = OB_SUCCESS;
+      }
+    } else {
+      brs_.size_ = 1;
+      for (int64_t col = 0; OB_SUCC(ret) && col < MY_SPEC.output_.count(); ++col) {
+        ObExpr *expr = MY_SPEC.output_.at(col);
+        ObDatum *datum = nullptr;
+        if (OB_FAIL(expr->eval(eval_ctx_, datum))) {
+        } else {
+          expr->set_evaluated_projected(eval_ctx_);
+        }
+      }
+    }
+  } else {
+    blocksstable::ObDatumRow *row = nullptr;
+    if (OB_FAIL(fts_index_.get_next_row(row))) {
+      if (OB_ITER_END == ret) {
+        if (OB_FAIL(fetch_next_fts_index_rows())) {
+          if (OB_ITER_END == ret) {
+            brs_.end_ = true;
+            ret = OB_SUCCESS;
+          }
+        } else if (OB_FAIL(fts_index_.get_next_row(row))) {
+        }
+      }
+    }
+    if (OB_SUCC(ret) && !brs_.end_) {
+      // Do not fetch another document while this batch is live: segment() reuses
+      // the word arena and the underlying scan owns the current doc-id bytes.
+      const int64_t count = min(capacity, 1 + fts_index_.get_remaining_row_count());
+      const ObObjDatumMapType *types = MY_SPEC.is_fts_index_aux_
+          ? ObFTIndexRowCache::FTS_INDEX_TYPES : ObFTIndexRowCache::FTS_DOC_WORD_TYPES;
+      ObDatum *datums[4] = {nullptr, nullptr, nullptr, nullptr};
+      for (int64_t col = 0; col < 4; ++col) {
+        datums[col] = MY_SPEC.output_.at(col)->locate_datums_for_update(eval_ctx_, count);
+      }
+      for (int64_t idx = 0; OB_SUCC(ret) && idx < count; ++idx) {
+        if (idx > 0 && OB_FAIL(fts_index_.get_next_row(row))) {
+        } else if (OB_ISNULL(row)) {
+          ret = OB_ERR_UNEXPECTED;
+        } else {
+          for (int64_t col = 0; OB_SUCC(ret) && col < 4; ++col) {
+            if (OB_FAIL(datums[col][idx].from_storage_datum(row->storage_datums_[col], types[col]))) {
+            }
+          }
+        }
+      }
+      if (OB_SUCC(ret)) {
+        brs_.size_ = count;
+        for (int64_t col = 0; col < 4; ++col) {
+          ObExpr *expr = MY_SPEC.output_.at(col);
+          expr->get_evaluated_flags(eval_ctx_).set_all(count);
+          expr->set_evaluated_projected(eval_ctx_);
+          ObEvalInfo &info = expr->get_eval_info(eval_ctx_);
+          info.cnt_ = count;
+          info.notnull_ = false;
+          info.point_to_frame_ = types[col] != OBJ_DATUM_STRING;
+        }
+      }
+    }
+  }
+  if (OB_SUCC(ret)) {
+    brs_.skip_->reset(brs_.size_);
+    brs_.set_all_rows_active(true);
   }
   return ret;
 }

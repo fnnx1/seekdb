@@ -1,0 +1,17 @@
+{
+  "ik_smart": {
+    "baseline": 0.07282493444444328,
+    "candidate": 0.07257050633333309,
+    "relative_improvement": 0.0034936950242542286
+  },
+  "ik_max_word": {
+    "baseline": 0.08745148861110942,
+    "candidate": 0.08783693866666475,
+    "relative_improvement": -0.004407587128326673
+  },
+  "beng": {
+    "baseline": 0.025800870999998518,
+    "candidate": 0.028119258333332436,
+    "relative_improvement": -0.08985694061778182
+  }
+}

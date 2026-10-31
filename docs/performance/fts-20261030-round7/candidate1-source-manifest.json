@@ -1,0 +1,30 @@
+{
+  "src/query/api/query/das/ob_das_id_protocol.h": {
+    "before": "efffb93b0a9fb9939603e5fac8318d83c06a9eed2804e305058f7c2f9de785b6",
+    "after": "22d07f0c1a3347c4ed7bb91adb00923919b3eb75111c2f0041d8988c78028599"
+  },
+  "src/storage/fts/dict/ob_ft_dat_dict.cpp": {
+    "before": "ee5e4b99924e3fd22e2e4a9712010cae45323cf10af5291290ee4100c9a59ed6",
+    "after": "0bb6cc127f51d6c17cc3f2026e8a4da6e4c9eb6e1ac808a2a04ca34bbc52838c"
+  },
+  "src/storage/fts/dict/ob_ft_dat_dict.h": {
+    "before": "db8f2df46ff03c361be357cd07445251151b4316d4788ab0b4fc06c0fb798603",
+    "after": "c0536ecefd5ea711495ef7355fd5dde2e487ea9b2c9341151a27c50a67f4ee56"
+  },
+  "src/storage/retrieval/ob_text_daat_iter.cpp": {
+    "before": "c38b4ef4c001b4c92acfcb34b4f5860ec8686756fbd6a05cd8155a4339ec69fe",
+    "after": "541b639071f751f5669c06e8c1a8774b1b2a5fcdc0fb98364858e15740996f8c"
+  },
+  "src/storage/retrieval/ob_text_daat_iter.h": {
+    "before": "fe1a36be726d9c7d7c98681327687bf6be1ffcf1e759f6c28e4476afa95939e0",
+    "after": "dd0d82f9a14267de6a86d84a19c67ee273aae4a4687ec5ed09ab5da57d410b0b"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/r/mysql/presence_sorted_runs.result": {
+    "before": "28d4695d91af1c54c01f0d6453a48bb1fd36bb133ef417d11413fca32a918fd2",
+    "after": "8bafeb1ee726aa7bf6cbb20e8bae74081a055316cda93d00b218351fc42c318e"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/t/presence_sorted_runs.test": {
+    "before": "2da33f18a97094a346b87af98385d64c21cddf12616d3087b742f6c17b223413",
+    "after": "fe7cbeed1ae073c872f69d8edfc8643f2c65a9ab24bb6b06b4580f63ab8e5cda"
+  }
+}

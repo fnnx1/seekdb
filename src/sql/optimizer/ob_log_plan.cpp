@@ -11987,6 +11987,55 @@ int ObLogPlan::construct_startup_filter_for_limit(ObRawExpr *limit_expr, ObLogic
   return ret;
 }
 
+static int check_predicate_only_match(const ObDMLStmt &stmt,
+                                     const ObMatchFunRawExpr &match,
+                                     bool &predicate_only)
+{
+  int ret = OB_SUCCESS;
+  predicate_only = false;
+  // Natural-language scores are positive for every matching document. Presence
+  // is sufficient only when the score has no consumers outside a direct bool
+  // WHERE predicate. Keep weighted/extended MATCH on the full scoring path.
+  if (stmt.is_select_stmt() && match.get_expr_type() == T_FUN_MATCH_AGAINST
+      && match.get_mode_flag() == NATURAL_LANGUAGE_MODE
+      && match.get_columns_boosts().empty() && nullptr == match.get_param_text_expr()
+      && stmt.get_from_items().count() == 1 && stmt.get_joined_tables().empty()
+      && stmt.get_semi_infos().empty() && stmt.get_subquery_exprs().empty()
+      // Residual predicates can share the rowkey projection with the IR scan.
+      // Retain the scoring path until that projection lifetime is independent.
+      && stmt.get_condition_exprs().count() == 1
+      && stmt.get_match_exprs().count() == 1) {
+    ObSEArray<ObRawExpr *, 16> other_exprs;
+    ObStmtExprGetter visitor;
+    visitor.set_relation_scope();
+    visitor.remove_scope(SCOPE_WHERE);
+    bool safe = true;
+    bool has_match_filter = false;
+    if (OB_FAIL(stmt.get_relation_exprs(other_exprs, visitor))) {
+      LOG_WARN("failed to collect MATCH consumers", K(ret));
+    }
+    for (int64_t i = 0; OB_SUCC(ret) && safe && i < other_exprs.count(); ++i) {
+      const ObRawExpr *expr = other_exprs.at(i);
+      safe = nullptr != expr && expr != &match && !expr->has_flag(CNT_MATCH_EXPR);
+    }
+    for (int64_t i = 0; OB_SUCC(ret) && safe && i < stmt.get_condition_exprs().count(); ++i) {
+      const ObRawExpr *expr = stmt.get_condition_exprs().at(i);
+      if (nullptr == expr) {
+        safe = false;
+      } else if (expr == &match || expr->has_flag(CNT_MATCH_EXPR)) {
+        if (expr->get_expr_type() == T_OP_BOOL && expr->get_param_count() == 1
+            && expr->get_param_expr(0) == &match) {
+          has_match_filter = true;
+        } else {
+          safe = false;
+        }
+      }
+    }
+    predicate_only = OB_SUCC(ret) && safe && has_match_filter;
+  }
+  return ret;
+}
+
 int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_match_exprs,
                                            const ObIArray<ObRawExpr *> &scan_match_filters,
                                            const ObIArray<ObRawExpr *> &all_match_filters,
@@ -11998,6 +12047,7 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
   ObRawExpr *match_pred = NULL;
   ObMatchFunRawExpr *match_against = NULL;
   ObMatchFunRawExpr *scan_match_expr = nullptr;
+  bool predicate_only = false;
 
   if (OB_UNLIKELY(1 != scan_match_exprs.count())) {
     ret = OB_NOT_SUPPORTED;
@@ -12035,8 +12085,10 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
                                                  table_scan->get_index_table_id(),
                                                  match_against,
                                                  table_scan->get_text_retrieval_info()))) {
+  } else if (OB_FAIL(check_predicate_only_match(*get_stmt(), *match_against, predicate_only))) {
   } else {
     ObTextRetrievalInfo &tr_info = table_scan->get_text_retrieval_info();
+    tr_info.need_calc_relevance_ = !predicate_only;
     tr_info.match_expr_ = match_against;
     tr_info.pushdown_match_filter_ = match_pred;
     // The mapping table is absent when the data-table rowkey is used as the document ID.

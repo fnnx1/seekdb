@@ -1,0 +1,35 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 2K of event 'cpu-clock:u'
+# Event count (approx.): 5987975904
+#
+# Overhead  Command          Shared Object             Symbol
+# ........  ...............  ........................  .....................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     2.98%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::storage::ObArrayHashMap::find(oceanbase::common::ObString const&, int&) const
+     2.68%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::storage::ObFTDATReader<void>::match_with_hit(oceanbase::common::ObString const&, oceanbase::storage::ObDATrieHit const&, oceanbase::storage::ObDATrieHit&) const
+     1.74%  ReqWorker        libc.so.6                 [.] __memcmp_avx2_movbe
+     1.57%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::storage::ObFTRangeDict::find_first_char_range(oceanbase::common::ObString const&, oceanbase::storage::ObIFTDict*&) const
+     1.44%  TimerWK0         libc.so.6                 [.] __memset_avx2_unaligned_erms
+     1.37%  ReqWorker        libc.so.6                 [.] __memmove_avx_unaligned_erms
+     1.37%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::storage::ObFTCacheDict::match(oceanbase::common::ObString const&, oceanbase::storage::ObDATrieHit&) const
+     1.27%  ReqWorker        libc.so.6                 [.] __strlen_avx2
+     1.24%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::common::PageArena<char, oceanbase::common::ModulePageAllocator>::_alloc_aligned(long, long)
+     1.07%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::storage::ObIKCJKProcessor::do_process(oceanbase::storage::TokenizeContext&, char const*, unsigned char, oceanbase::storage::ObFTCharUtil::CharType)
+     1.00%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::common::ObArenaAllocator::alloc(long, oceanbase::lib::ObMemAttr const&)
+     0.94%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::storage::ObAddWord::groupby_word(oceanbase::storage::ObFTWord const&, long)
+     0.90%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::common::ObCharset::strcmp(oceanbase::common::ObCollationType, oceanbase::common::ObString const&, oceanbase::common::ObString const&)
+     0.87%  ReqWorker        seekdb-round8-candidate3  [.] ob_strnncoll_mb_bin(ObCharsetInfo const*, unsigned char const*, unsigned long, unsigned char const*, unsigned long, bool)
+     0.84%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::storage::ObFTSortList::add_token(oceanbase::storage::ObIKToken const&)
+     0.77%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::storage::ObIKArbitrator::output_result(oceanbase::storage::TokenizeContext&)
+     0.74%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::common::ObCharset::get_charset(oceanbase::common::ObCollationType)
+     0.70%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::common::ObCharset::is_argument_valid(oceanbase::common::ObCollationType const&, char const*, long, char const*, long)
+     0.70%  ReqWorker        seekdb-round8-candidate3  [.] oceanbase::common::ObLobInRowCursor::get_length() const
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

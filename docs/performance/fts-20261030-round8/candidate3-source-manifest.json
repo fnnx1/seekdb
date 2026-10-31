@@ -1,0 +1,22 @@
+{
+  "src/sql/engine/sort/ob_sort_op_impl.cpp": {
+    "before": "330c4e82ccdc0555c19bb82197ae6de2e73f924ca780b64050291182e24ffa6a",
+    "after": "330c4e82ccdc0555c19bb82197ae6de2e73f924ca780b64050291182e24ffa6a"
+  },
+  "src/storage/fts/dict/ob_ft_dat_dict.cpp": {
+    "before": "ee5e4b99924e3fd22e2e4a9712010cae45323cf10af5291290ee4100c9a59ed6",
+    "after": "2d76651b07d06df355d33950cc4145278279dd71343c944e295579af66463f6c"
+  },
+  "src/storage/fts/dict/ob_ft_dat_dict.h": {
+    "before": "db8f2df46ff03c361be357cd07445251151b4316d4788ab0b4fc06c0fb798603",
+    "after": "c0536ecefd5ea711495ef7355fd5dde2e487ea9b2c9341151a27c50a67f4ee56"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/r/mysql/sort_repeated_prefix.result": {
+    "before": null,
+    "after": "5c3d18131f9f5221436a78706b8fbb607389625f7960e59327b4152aa9e293f2"
+  },
+  "tools/deploy/mysql_test/test_suite/fts_index/t/sort_repeated_prefix.test": {
+    "before": null,
+    "after": "bd02b0556fbd5eb2bf089042ae42a105395969591edead01f4dfc71b8acfbc5f"
+  }
+}

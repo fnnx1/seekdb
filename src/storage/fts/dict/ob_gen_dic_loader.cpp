@@ -111,22 +111,37 @@ int ObGenDicLoader::init()
   return ret;
 }
 
-int ObGenDicLoader::get_dic_loader(const ObString &parser_name, 
-                                   const ObCharsetType charset, 
+int ObGenDicLoader::get_dic_loader(const ObString &parser_name,
+                                   const ObCharsetType charset,
                                    ObDicLoaderHandle &loader_handle)
 {
   int ret = OB_SUCCESS;
   ObGenDicLoaderKey dic_loader_key;
   ObDicLoader *dic_loader = nullptr;
-  if (!is_inited_) {
-    ret = OB_NOT_INIT;
-  } else if (parser_name.empty()
-             || charset == CHARSET_INVALID) {
-    ret = OB_INVALID_ARGUMENT;
-  } else if (OB_FAIL(dic_loader_key.init(parser_name, charset))) {
-  } else {
+  {
+    // Most requests only acquire a reference to an existing loader. Keep the
+    // registry protected while acquiring that reference, without serializing
+    // concurrent readers through the writer's global reference synchronization.
+    TCRLockGuard guard(lock_);
+    if (!is_inited_) {
+      ret = OB_NOT_INIT;
+    } else if (parser_name.empty() || charset == CHARSET_INVALID) {
+      ret = OB_INVALID_ARGUMENT;
+    } else if (OB_FAIL(dic_loader_key.init(parser_name, charset))) {
+    } else if (OB_FAIL(dic_loader_map_.get_refactored(dic_loader_key, dic_loader))) {
+      if (OB_HASH_NOT_EXIST != ret) {
+        ret = OB_ERR_UNEXPECTED;
+      }
+    } else if (OB_FAIL(loader_handle.set_loader(dic_loader))) {
+    }
+  }
+  if (OB_HASH_NOT_EXIST == ret) {
+    // Release the read lock before acquiring the write lock, and check again:
+    // another first caller may have published the loader in the meantime.
     TCWLockGuard guard(lock_);
-    if (OB_FAIL(dic_loader_map_.get_refactored(dic_loader_key, dic_loader))) {
+    if (!is_inited_) {
+      ret = OB_NOT_INIT;
+    } else if (OB_FAIL(dic_loader_map_.get_refactored(dic_loader_key, dic_loader))) {
       if (OB_HASH_NOT_EXIST == ret) {
         if (OB_FAIL(gen_dic_loader(dic_loader_key, dic_loader))) {
         } else if (OB_ISNULL(dic_loader)) {

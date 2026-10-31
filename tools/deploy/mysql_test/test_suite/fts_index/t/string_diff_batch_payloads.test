@@ -1,0 +1,45 @@
+# Fixed-width common segments, hex packing, NULLs and fallback widths.
+# Building the covering index after loading creates SSTable payloads without
+# changing global freeze/compaction settings. Encoding selection stays native.
+--disable_warnings
+DROP TABLE IF EXISTS fts_string_diff_payloads;
+DROP TABLE IF EXISTS fts_string_diff_digits;
+--enable_warnings
+CREATE TABLE fts_string_diff_digits(n INT PRIMARY KEY);
+INSERT INTO fts_string_diff_digits VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE fts_string_diff_payloads(
+  id INT PRIMARY KEY, v8 VARBINARY(8), v16 VARBINARY(16),
+  v128 VARBINARY(128), v129 VARBINARY(129), hexp VARBINARY(128),
+  braw VARBINARY(16), vany VARBINARY(160));
+INSERT INTO fts_string_diff_payloads
+SELECT n,
+  IF(MOD(n,19)=0,NULL,CONCAT(X'00FF2000',UNHEX(LPAD(HEX(n),8,'0')))),
+  IF(MOD(n,17)=0,NULL,CONCAT(X'000000008000FF0020000000',UNHEX(LPAD(HEX(n),8,'0')))),
+  IF(MOD(n,23)=0,NULL,CONCAT(REPEAT(X'80',60),UNHEX(LPAD(HEX(n),8,'0')),REPEAT(X'00',64))),
+  IF(MOD(n,29)=0,NULL,CONCAT(REPEAT(X'00',60),UNHEX(LPAD(HEX(n),8,'0')),REPEAT(X'FF',65))),
+  IF(MOD(n,2)=0,NULL,CONCAT(REPEAT('A',16),MD5(n),MD5(n*19+1),MD5(n*31+7),REPEAT('F',16))),
+  IF(MOD(n,31)=0,NULL,CONCAT(X'0000FF00',UNHEX(LPAD(HEX(n),8,'0')),X'80002000',UNHEX(LPAD(HEX(MOD(n*73,65536)),8,'0')))),
+  CASE MOD(n,4) WHEN 0 THEN NULL WHEN 1 THEN X'' WHEN 2 THEN REPEAT(X'FF',128) ELSE REPEAT(X'00',129) END
+FROM (SELECT a.n*100+b.n*10+c.n AS n FROM fts_string_diff_digits a CROSS JOIN fts_string_diff_digits b CROSS JOIN fts_string_diff_digits c) q WHERE n<257;
+ALTER TABLE fts_string_diff_payloads ADD INDEX idx_payloads(v16,v8,v128,v129,hexp,braw,vany,id);
+SELECT /*+ opt_param('ROWSETS_MAX_ROWS',0) */ id,HEX(v8),HEX(v16),MD5(v128),MD5(v129),MD5(hexp),HEX(braw),MD5(vany) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) ORDER BY id;
+SELECT /*+ opt_param('ROWSETS_MAX_ROWS',1) */ id,HEX(v8),HEX(v16),MD5(v128),MD5(v129),MD5(hexp),HEX(braw),MD5(vany) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) WHERE MOD(id,7) IN(0,3) ORDER BY id;
+SELECT /*+ opt_param('ROWSETS_MAX_ROWS',2) */ id,HEX(v8),HEX(v16),MD5(v128),MD5(v129),MD5(hexp),HEX(braw),MD5(vany) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) WHERE MOD(id,7) IN(0,3) ORDER BY id;
+SELECT /*+ opt_param('ROWSETS_MAX_ROWS',7) */ id,HEX(v8),HEX(v16),MD5(v128),MD5(v129),MD5(hexp),HEX(braw),MD5(vany) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) WHERE MOD(id,7) IN(0,3) ORDER BY id;
+SELECT /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id,HEX(v8),HEX(v16),MD5(v128),MD5(v129),MD5(hexp),HEX(braw),MD5(vany) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) ORDER BY id;
+SELECT COUNT(*),COUNT(v8),COUNT(v16),COUNT(v128),COUNT(v129),COUNT(hexp),COUNT(braw),COUNT(vany),SUM(OCTET_LENGTH(v128)),SUM(OCTET_LENGTH(v129)),SUM(OCTET_LENGTH(hexp)) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads);
+SELECT id,HEX(v8),HEX(v16),MD5(v128),MD5(v129),MD5(hexp),HEX(braw),MD5(vany) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) WHERE v16 IS NULL ORDER BY id;
+PREPARE fts_diff_scan FROM 'SELECT /*+ opt_param(''ROWSETS_MAX_ROWS'',7) */ id,HEX(v16),MD5(v128),MD5(v129),MD5(hexp) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) WHERE id>=? AND id<? ORDER BY id';
+SET @fts_diff_low=120,@fts_diff_high=131;
+EXECUTE fts_diff_scan USING @fts_diff_low,@fts_diff_high;
+SET @fts_diff_low=250,@fts_diff_high=257;
+EXECUTE fts_diff_scan USING @fts_diff_low,@fts_diff_high;
+DEALLOCATE PREPARE fts_diff_scan;
+START TRANSACTION;
+UPDATE fts_string_diff_payloads SET v16=X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',hexp=NULL WHERE id=127;
+DELETE FROM fts_string_diff_payloads WHERE id=128;
+SELECT id,HEX(v16),MD5(v128),MD5(v129),MD5(hexp) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) WHERE id BETWEEN 125 AND 130 ORDER BY id;
+ROLLBACK;
+SELECT id,HEX(v16),MD5(v128),MD5(v129),MD5(hexp) FROM fts_string_diff_payloads FORCE INDEX(idx_payloads) WHERE id BETWEEN 125 AND 130 ORDER BY id;
+DROP TABLE fts_string_diff_payloads;
+DROP TABLE fts_string_diff_digits;

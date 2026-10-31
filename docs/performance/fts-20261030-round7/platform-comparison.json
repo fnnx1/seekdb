@@ -1,0 +1,58 @@
+{
+  "rows": {
+    "build_ik_all_sec": {
+      "previous": 5.551,
+      "current": 5.657,
+      "time_reduction": -0.01909565843992067
+    },
+    "build_ik_content_sec": {
+      "previous": 4.225,
+      "current": 4.326,
+      "time_reduction": -0.023905325443786873
+    },
+    "build_beng_en_sec": {
+      "previous": 2.021,
+      "current": 2.122,
+      "time_reduction": -0.049975259772389924
+    },
+    "tokenize_ik_avg_ms": {
+      "previous": 0.0612,
+      "current": 0.0634,
+      "time_reduction": -0.03594771241830075
+    },
+    "tokenize_beng_avg_ms": {
+      "previous": 0.0368,
+      "current": 0.0382,
+      "time_reduction": -0.03804347826086962
+    },
+    "query_cn_avg_ms": {
+      "previous": 0.3918,
+      "current": 0.3618,
+      "time_reduction": 0.07656967840735063
+    },
+    "query_beng_avg_ms": {
+      "previous": 0.5784,
+      "current": 0.5264,
+      "time_reduction": 0.08990318118948837
+    },
+    "query_mixed_avg_ms": {
+      "previous": 0.412,
+      "current": 0.3842,
+      "time_reduction": 0.06747572815533975
+    },
+    "query_limit_avg_ms": {
+      "previous": 0.1007,
+      "current": 0.1412,
+      "time_reduction": -0.40218470705064546
+    }
+  },
+  "category_reductions": {
+    "build": -0.030992081218699157,
+    "tokenize": -0.036995595339585186,
+    "query": -0.04205902982461668
+  },
+  "reported_platform_score_out_of_50": 40.374516627103915,
+  "additional_uniform_time_reduction_to_full_score_if_baseline_unchanged": 0.1614323746895029,
+  "association": "Metrics supplied without commit SHA; associated provisionally with last delivered 7fe1edb7.",
+  "note": "Observed inter-version changes include platform run variation; not a causal code measurement."
+}

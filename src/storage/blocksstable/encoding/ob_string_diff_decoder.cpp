@@ -165,6 +165,78 @@ int ObStringDiffDecoder::batch_decode(
     if (OB_FAIL(ret)) {
     } else if (OB_ISNULL(buf = static_cast<char *>(ctx.allocator_->alloc(buf_size * row_cap)))) {
       ret = OB_ALLOCATE_MEMORY_FAILED;
+    } else if (ctx.is_fix_length() && !header_->is_hex_packing()
+        && string_size <= min_buf_size && header_->diff_desc_cnt_ <= min_buf_size && row_cap > 1) {
+      // Short fixed-width cells share one segment layout. Decode that layout
+      // once per batch, then initialize and patch each non-null row together.
+      // Keep the original 128-byte allocation stride and datum ownership.
+      char common_template[min_buf_size] = {};
+      uint16_t dest_offsets[min_buf_size];
+      uint16_t source_offsets[min_buf_size];
+      uint8_t lengths[min_buf_size];
+      int64_t patch_count = 0;
+      uint16_t dest_offset = 0;
+      uint16_t source_offset = 0;
+      header_->copy_string(ObStringDiffHeader::LeftToRight(), std::logical_not<uint8_t>(),
+          header_->common_data(), common_template);
+      for (int64_t i = 0; i < header_->diff_desc_cnt_; ++i) {
+        const auto &desc = header_->diff_descs_[i];
+        if (desc.diff_) {
+          dest_offsets[patch_count] = dest_offset;
+          source_offsets[patch_count] = source_offset;
+          lengths[patch_count++] = desc.count_;
+          source_offset += desc.count_;
+        }
+        dest_offset += desc.count_;
+      }
+      const bool has_nulls = ctx.has_extend_value();
+      for (int64_t i = 0; i < row_cap; ++i) {
+        if (!has_nulls || !datums[i].is_null()) {
+          char *dest = buf + i * buf_size;
+          const unsigned char *source = col_data + data_offset + row_ids[i] * header_->length_;
+          if (16 == string_size) {
+            MEMCPY(dest, common_template, 16);
+          } else {
+            MEMCPY(dest, common_template, string_size);
+          }
+          for (int64_t patch = 0; patch < patch_count; ++patch) {
+            char *to = dest + dest_offsets[patch];
+            const unsigned char *from = source + source_offsets[patch];
+            // Constant-size copies avoid a libc call for short changed runs.
+            // memcpy also permits unaligned cell and segment boundaries.
+            switch (lengths[patch]) {
+              case 1: *to = *from; break;
+              case 2: MEMCPY(to, from, 2); break;
+              case 3: MEMCPY(to, from, 3); break;
+              case 4: MEMCPY(to, from, 4); break;
+              case 5: MEMCPY(to, from, 5); break;
+              case 6: MEMCPY(to, from, 6); break;
+              case 7: MEMCPY(to, from, 7); break;
+              case 8: MEMCPY(to, from, 8); break;
+              case 16: MEMCPY(to, from, 16); break;
+              default: MEMCPY(to, from, lengths[patch]); break;
+            }
+          }
+          datums[i].pack_ = string_size;
+          datums[i].ptr_ = dest;
+        }
+      }
+      return ret;
+    } else if (string_size <= min_buf_size && row_cap > 1) {
+      // Common segments are identical for the whole microblock. Assemble them
+      // once instead of interpreting the segment descriptors for every row.
+      // Initialize the differing positions too: they are overwritten below,
+      // but the template copy must not read uninitialized bytes.
+      char common_template[min_buf_size] = {};
+      header_->copy_string(ObStringDiffHeader::LeftToRight(), std::logical_not<uint8_t>(),
+          header_->common_data(), common_template);
+      for (int64_t i = 0; i < row_cap; ++i) {
+        if (16 == string_size) {
+          MEMCPY(buf + i * buf_size, common_template, 16);
+        } else {
+          MEMCPY(buf + i * buf_size, common_template, string_size);
+        }
+      }
     } else {
       for (int64_t i = 0; i < row_cap; ++i) {
         header_->copy_string(ObStringDiffHeader::LeftToRight(), std::logical_not<uint8_t>(),

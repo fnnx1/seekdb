@@ -1,0 +1,30 @@
+{
+  "diagnostic_only": true,
+  "binary": "/home/fbd2451702/fts-build-setup/seekdb-round7-candidate2",
+  "target": "fts_large_bench.docs (read only)",
+  "started_utc": "2026-10-30T10:41:02.239303+00:00",
+  "pid": 1970374,
+  "version": "5.7.25-OceanBase seekdb-v1.4.0.0",
+  "gdb_ready": true,
+  "matching_documents": 11000,
+  "sql_wall_sec": 2.290877,
+  "debugger_exit_code": 0,
+  "debugger": {
+    "diagnostic_only": true,
+    "pid": 1970374,
+    "elapsed_sec": 2.074,
+    "timed_out": false,
+    "forced_debugger_cleanup": false,
+    "gdb_exit_code": 0,
+    "detached_confirmed": true,
+    "proof": {
+      "batch_size": 256,
+      "frame": "oceanbase::blocksstable::ObStringDiffDecoder::batch_decode",
+      "source_line": "ob_string_diff_decoder.cpp:193",
+      "pid": 1970374
+    },
+    "success": true
+  },
+  "success": true,
+  "finished_utc": "2026-10-30T10:41:04.671079+00:00"
+}

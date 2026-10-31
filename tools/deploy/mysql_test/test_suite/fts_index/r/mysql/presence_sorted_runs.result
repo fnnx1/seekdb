@@ -1,0 +1,178 @@
+set names utf8mb4;
+drop table if exists presence_sorted_runs;
+drop table if exists presence_sorted_heap;
+drop table if exists presence_sorted_digits;
+create table presence_sorted_digits(n int primary key);
+insert into presence_sorted_digits values(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table presence_sorted_runs(id int primary key, content text,
+fulltext index ft(content) with parser beng);
+insert into presence_sorted_runs
+select n,case when n<=64 then 'alpha' when n=65 then 'alpha beta'
+  when n<=128 then 'beta' when n<=160 then if(mod(n,2)=0,'alpha','beta')
+when n<=192 then 'alpha beta gamma' when n=193 then 'gamma'
+  when n=194 then null else '' end
+from (select a.n*100+b.n*10+c.n as n from presence_sorted_digits a
+cross join presence_sorted_digits b cross join presence_sorted_digits c) d
+where n between 1 and 195 order by n;
+select count(*),sum(id),sum(id*id),bit_xor(id) from presence_sorted_runs
+where content like '%alpha%' or content like '%beta%';
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+192	18528	2377760	192
+select /*+ opt_param('ROWSETS_MAX_ROWS',0) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+192	18528	2377760	192
+select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+192	18528	2377760	192
+select /*+ opt_param('ROWSETS_MAX_ROWS',2) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+192	18528	2377760	192
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+192	18528	2377760	192
+select /*+ opt_param('ROWSETS_MAX_ROWS',32) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+192	18528	2377760	192
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+192	18528	2377760	192
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id)
+from presence_sorted_runs where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)
+193	18721	2415009
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id)
+from presence_sorted_runs where match(content) against('alpha alpha missingword');
+count(*)	sum(id)	sum(id*id)
+113	10113	1431025
+select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+193	18721	2415009	1
+select /*+ opt_param('ROWSETS_MAX_ROWS',2) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('gamma beta alpha');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+193	18721	2415009	1
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('missingword alpha gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+114	10306	1468274	128
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ id
+from presence_sorted_runs where match(content) against('alpha beta gamma') limit 12 offset 185) v;
+count(*)
+8
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',2) */ id
+from presence_sorted_runs where match(content) against('alpha beta gamma') limit 12 offset 193) v;
+count(*)
+0
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ id
+from presence_sorted_runs where match(content) against('alpha beta') limit 1 offset 64) v;
+count(*)
+1
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ id
+from presence_sorted_runs where match(content) against('alpha beta') limit 8 offset 63) v;
+count(*)
+8
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',32) */ id
+from presence_sorted_runs where match(content) against('alpha beta') limit 33 offset 31) v;
+count(*)
+33
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+from presence_sorted_runs where match(content) against('alpha beta') limit 65 offset 64) v;
+count(*)
+65
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+from presence_sorted_runs where match(content) against('alpha beta') limit 128 offset 127) v;
+count(*)
+65
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+from presence_sorted_runs where match(content) against('alpha beta') limit 32 offset 191) v;
+count(*)
+1
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+from presence_sorted_runs where match(content) against('alpha beta') limit 0 offset 31) v;
+count(*)
+0
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+from presence_sorted_runs where match(content) against('alpha beta') limit 32 offset 192) v;
+count(*)
+0
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ id from presence_sorted_runs
+where match(content) against('alpha beta') order by id limit 8 offset 61;
+id
+62
+63
+64
+65
+66
+67
+68
+69
+select id,round(match(content) against('alpha beta'),12) as score from presence_sorted_runs
+where match(content) against('alpha beta') order by score desc,id limit 8;
+id	score
+65	0.743243243243
+161	0.700636942675
+162	0.700636942675
+163	0.700636942675
+164	0.700636942675
+165	0.700636942675
+166	0.700636942675
+167	0.700636942675
+select count(*),sum(id) from presence_sorted_runs
+where match(content) against('+alpha -beta' in boolean mode);
+count(*)	sum(id)
+80	4400
+create table presence_sorted_heap(id int, content text, fulltext index ft(content) with parser beng);
+insert into presence_sorted_heap select * from presence_sorted_runs order by id;
+select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_heap where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+193	18721	2415009	1
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_heap where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+193	18721	2415009	1
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_heap where match(content) against('alpha beta gamma');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+193	18721	2415009	1
+prepare presence_sorted_stmt from 'select count(*) from (select id from presence_sorted_runs where match(content) against(?) limit ? offset ?) v';
+set @presence_sorted_words='alpha beta',@presence_sorted_limit=65,@presence_sorted_offset=64;
+execute presence_sorted_stmt using @presence_sorted_words,@presence_sorted_limit,@presence_sorted_offset;
+count(*)
+65
+set @presence_sorted_words='alpha',@presence_sorted_limit=32,@presence_sorted_offset=31;
+execute presence_sorted_stmt using @presence_sorted_words,@presence_sorted_limit,@presence_sorted_offset;
+count(*)
+32
+set @presence_sorted_words='missingword',@presence_sorted_limit=32,@presence_sorted_offset=0;
+execute presence_sorted_stmt using @presence_sorted_words,@presence_sorted_limit,@presence_sorted_offset;
+count(*)
+0
+deallocate prepare presence_sorted_stmt;
+start transaction;
+update presence_sorted_runs set content='gamma' where id in (1,64,128,160);
+delete from presence_sorted_runs where id in (65,129,192);
+insert into presence_sorted_runs values(196,'alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+186	17985	2312365	101
+select count(*),sum(id),sum(id*id),bit_xor(id) from presence_sorted_runs
+where content like '%alpha%' or content like '%beta%';
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+186	17985	2312365	101
+rollback;
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id),bit_xor(id)
+from presence_sorted_runs where match(content) against('alpha beta');
+count(*)	sum(id)	sum(id*id)	bit_xor(id)
+192	18528	2377760	192
+drop table presence_sorted_heap;
+drop table presence_sorted_runs;
+drop table presence_sorted_digits;

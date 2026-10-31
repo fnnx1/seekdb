@@ -82,10 +82,16 @@ public:
 
 private:
   static const int64_t DEFAULT_STOPWORD_BUCKET_NUM = 37L;
+  static const int64_t STOPWORD_COUNT = sizeof(ob_stop_word_list) / sizeof(ob_stop_word_list[0]);
+  static bool encode_ascii_word(const ObString &word, uint64_t &code);
   typedef common::hash::ObHashSet<storage::ObFTWord> StopWordSet;
 
   StopWordSet stopword_set_;
   ObObjMeta stopword_type_;
+  // Derived from the same built-in list during init, then read-only. Other
+  // strings keep using the collation-aware set, including accented characters.
+  uint64_t ascii_stopwords_[STOPWORD_COUNT] = {};
+  bool ascii_stopwords_valid_ = false;
 
   bool inited_ = false;
 

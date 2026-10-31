@@ -1,0 +1,4 @@
+document_local_tokens.runner: ok
+predicate_only_match.runner: ok
+retrieval_binary_ids.runner: ok
+retrieval_sort_keys.runner: ok

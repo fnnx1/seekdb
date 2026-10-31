@@ -232,8 +232,20 @@ int ObDocIdExt::from_obj(const ObObj &obj)
 int ObDocIdExt::from_datum(const ObDatum &datum)
 {
   int ret = common::OB_SUCCESS;
-  int64_t dummy_pos = 0;
-  if (OB_FAIL(datum_.deep_copy(datum, buf_, OB_DOC_ID_EXT_SIZE, dummy_pos))) {
+  if (!datum.is_null() && datum.len_ == sizeof(uint64_t)) {
+    // Keep the owned representation, but let the compiler inline the copy for
+    // fixed-width IDs. memmove also permits a source view into this same ID.
+    MEMMOVE(buf_, datum.ptr_, sizeof(uint64_t));
+    datum_ = datum;
+    datum_.ptr_ = buf_;
+  } else if (!datum.is_null() && datum.len_ == 2 * sizeof(uint64_t)) {
+    MEMMOVE(buf_, datum.ptr_, 2 * sizeof(uint64_t));
+    datum_ = datum;
+    datum_.ptr_ = buf_;
+  } else {
+    int64_t dummy_pos = 0;
+    if (OB_FAIL(datum_.deep_copy(datum, buf_, OB_DOC_ID_EXT_SIZE, dummy_pos))) {
+    }
   }
   return ret;
 }

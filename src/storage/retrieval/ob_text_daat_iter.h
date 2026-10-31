@@ -55,18 +55,35 @@ public:
   ObTextDaaTIter() : ObSRDaaTIterImpl(),
       bm25_param_estimator_(),
       mode_flag_(sql::ObMatchAgainstMode::NATURAL_LANGUAGE_MODE),
-      function_lookup_mode_(false) {}
+      function_lookup_mode_(false),
+      presence_batches_{} {}
   virtual ~ObTextDaaTIter() { reset(); }
 
   int init(const ObTextDaaTParam &param);
+  virtual int get_next_rows(const int64_t capacity, int64_t &count) override;
   virtual void reuse(const bool switch_tablet = false) override;
   virtual void reset() override;
 protected:
   virtual int pre_process() override;
+  int get_short_union_rows(const int64_t capacity, int64_t &count);
+  int get_presence_union_rows(const int64_t capacity, int64_t &count);
+  template <int64_t DIMS>
+  int get_fixed_presence_union_rows(const int64_t capacity, int64_t &count);
+  void project_presence_results(const int64_t count);
 protected:
+  static constexpr int64_t SHORT_UNION_MAX_DIMS = 8;
+  struct PresenceIdBatch {
+    PresenceIdBatch() : ids_(nullptr), count_(0), pos_(0), ended_(false) {}
+    void reset() { ids_ = nullptr; count_ = 0; pos_ = 0; ended_ = false; }
+    const ObDocIdExt *ids_;
+    int64_t count_;
+    int64_t pos_;
+    bool ended_;
+  };
   ObBM25ParamEstimator bm25_param_estimator_;
   sql::ObMatchAgainstMode mode_flag_;
   bool function_lookup_mode_;
+  PresenceIdBatch presence_batches_[SHORT_UNION_MAX_DIMS];
 private:
   DISALLOW_COPY_AND_ASSIGN(ObTextDaaTIter);
 };

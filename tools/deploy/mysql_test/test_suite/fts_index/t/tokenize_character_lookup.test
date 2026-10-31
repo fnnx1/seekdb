@@ -1,0 +1,28 @@
+# Each character lookup belongs only to one cursor and one actual DAT range.
+# Preserve exact token order, counts and doc_len across modes and dynamic rows.
+set names utf8mb4;
+select tokenize('一一对应 一个中国 一个中心 不中不西 中华人民共和国 华中科技大学 南京市长江大桥 研究生命起源 足球运动员 黑龙江省 龟兔赛跑', 'ik');
+select tokenize('一一对应 一个中国 一个中心 不中不西 中华人民共和国 华中科技大学 南京市长江大桥 研究生命起源 足球运动员 黑龙江省 龟兔赛跑', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+select tokenize('研究研究生研究生物研究生命起源 南京南京市南京市长江大桥 长江长江大桥 大桥大桥长江长江', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+select tokenize('研究研究生研究生物研究生命起源 南京南京市南京市长江大桥 长江长江大桥 大桥大桥长江长江', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+select tokenize('𠮷𠀀😀 éÉ Ωω 한국어 日本語 ＡＢＣ １２３ 3.14公斤 一千公里 a中华人民共和国b a数据库b 𠮷𠀀😀', 'ik', '[{"output":"all"}]');
+select tokenize(convert(concat('中国', char(0), '长江大桥', char(9), '中文数据库', char(10), '南京市研究生命') using utf8mb4), 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+--disable_warnings
+drop table if exists tokenize_character_lookup;
+--enable_warnings
+create table tokenize_character_lookup(id int primary key, content varchar(4096), parser_name varchar(16), properties varchar(1024));
+insert into tokenize_character_lookup values
+ (1, repeat('一一对应南京市长江大桥研究生命起源龟兔赛跑。', 12), 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]'),
+ (2, repeat('一一对应南京市长江大桥研究生命起源龟兔赛跑。', 12), 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]'),
+ (3, '长江大桥长江长江 中文数据库中文中文 𠮷龟兔赛跑𠮷', 'ik', '[{"output":"all"}]'),
+ (4, 'Alpha ALPHA beta beta Unicode', 'beng', '[{"output":"all"}]'),
+ (5, '', 'ik', '[{"output":"all"}]'),
+ (6, null, 'ik', '[{"output":"all"}]');
+select id, tokenize(content, parser_name, properties) as tokens from tokenize_character_lookup order by id;
+select id, tokenize(content, parser_name, properties) as tokens from tokenize_character_lookup order by id desc;
+--error ER_WRONG_ARGUMENTS
+select tokenize('研究生命起源', 'ik', '[{"additional_args":[{"ik_mode":"invalid"}]}]');
+select tokenize('研究生命起源研究生命起源', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+select tokenize('研究生命起源研究生命起源', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+select tokenize(concat(tokenize('南京市长江大桥', 'ik'), ' 研究生命起源'), 'ik', '[{"output":"all"}]');
+drop table tokenize_character_lookup;

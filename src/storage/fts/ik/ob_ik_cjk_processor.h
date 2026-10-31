@@ -18,6 +18,7 @@
 #define _OCEANBASE_STORAGE_FTS_IK_OB_IK_CJK_PROCESSOR_H_
 
 #include "lib/allocator/ob_allocator.h"
+#include "lib/container/ob_se_array.h"
 #include "storage/fts/dict/ob_ft_dict.h"
 #include "storage/fts/ik/ob_ik_processor.h"
 
@@ -30,7 +31,7 @@ class ObIKCJKProcessor : public ObIIKProcessor
 {
 public:
   ObIKCJKProcessor(const ObIFTDict &dict_main, ObIAllocator &alloc)
-      : hits_(alloc), dict_main_(dict_main), cjk_start_(-1), cjk_end_(-1)
+      : hits_(OB_MALLOC_NORMAL_BLOCK_SIZE, alloc), dict_main_(dict_main)
   {
   }
   ~ObIKCJKProcessor() override { hits_.reset(); }
@@ -42,10 +43,24 @@ public:
                  const ObFTCharUtil::CharType type) override;
 
 private:
-  ObList<ObDATrieHit, ObIAllocator> hits_;
+  struct ActiveHit
+  {
+    ActiveHit() : value_(nullptr, 0) {}
+    explicit ActiveHit(const ObDATrieHit &value) : value_(value) {}
+    ActiveHit(const ActiveHit &other) = default;
+    ActiveHit &operator=(const ActiveHit &other)
+    {
+      // ObDATrieHit's assignment copies only traversal state. Moving a live
+      // state between array slots must also retain its dictionary range.
+      value_ = other.value_;
+      value_.dict_ = other.value_.dict_;
+      return *this;
+    }
+    ObDATrieHit value_;
+  };
+
+  common::ObSEArray<ActiveHit, 8, common::ObIAllocator &> hits_;
   const ObIFTDict &dict_main_;
-  int64_t cjk_start_;
-  int64_t cjk_end_;
 
 private:
   DISALLOW_COPY_AND_ASSIGN(ObIKCJKProcessor);

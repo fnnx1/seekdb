@@ -1,0 +1,106 @@
+# description: Presence unions preserve sorted-run boundaries, fused projection and OFFSET.
+set names utf8mb4;
+--disable_warnings
+drop table if exists presence_sorted_runs;
+drop table if exists presence_sorted_heap;
+drop table if exists presence_sorted_digits;
+--enable_warnings
+create table presence_sorted_digits(n int primary key);
+insert into presence_sorted_digits values(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table presence_sorted_runs(id int primary key, content text,
+  fulltext index ft(content) with parser beng);
+# Long disjoint prefixes, equal boundary IDs, short interleaved runs and a shared suffix.
+insert into presence_sorted_runs
+select n,case when n<=64 then 'alpha' when n=65 then 'alpha beta'
+  when n<=128 then 'beta' when n<=160 then if(mod(n,2)=0,'alpha','beta')
+  when n<=192 then 'alpha beta gamma' when n=193 then 'gamma'
+  when n=194 then null else '' end
+from (select a.n*100+b.n*10+c.n as n from presence_sorted_digits a
+  cross join presence_sorted_digits b cross join presence_sorted_digits c) d
+where n between 1 and 195 order by n;
+select count(*),sum(id),sum(id*id),bit_xor(id) from presence_sorted_runs
+  where content like '%alpha%' or content like '%beta%';
+select /*+ opt_param('ROWSETS_MAX_ROWS',0) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',2) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',32) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id)
+  from presence_sorted_runs where match(content) against('alpha beta gamma');
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id)
+  from presence_sorted_runs where match(content) against('alpha alpha missingword');
+# Fixed fan-in merge must survive a refill on every row and exhausted streams.
+select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta gamma');
+select /*+ opt_param('ROWSETS_MAX_ROWS',2) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('gamma beta alpha');
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('missingword alpha gamma');
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ id
+  from presence_sorted_runs where match(content) against('alpha beta gamma') limit 12 offset 185) v;
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',2) */ id
+  from presence_sorted_runs where match(content) against('alpha beta gamma') limit 12 offset 193) v;
+# Cardinality-only LIMIT preserves the number of unique rows after OFFSET.
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ id
+  from presence_sorted_runs where match(content) against('alpha beta') limit 1 offset 64) v;
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ id
+  from presence_sorted_runs where match(content) against('alpha beta') limit 8 offset 63) v;
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',32) */ id
+  from presence_sorted_runs where match(content) against('alpha beta') limit 33 offset 31) v;
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+  from presence_sorted_runs where match(content) against('alpha beta') limit 65 offset 64) v;
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+  from presence_sorted_runs where match(content) against('alpha beta') limit 128 offset 127) v;
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+  from presence_sorted_runs where match(content) against('alpha beta') limit 32 offset 191) v;
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+  from presence_sorted_runs where match(content) against('alpha beta') limit 0 offset 31) v;
+select count(*) from (select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ id
+  from presence_sorted_runs where match(content) against('alpha beta') limit 32 offset 192) v;
+# Explicit result ordering, scores and Boolean mode remain observable and unchanged.
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ id from presence_sorted_runs
+  where match(content) against('alpha beta') order by id limit 8 offset 61;
+select id,round(match(content) against('alpha beta'),12) as score from presence_sorted_runs
+  where match(content) against('alpha beta') order by score desc,id limit 8;
+select count(*),sum(id) from presence_sorted_runs
+  where match(content) against('+alpha -beta' in boolean mode);
+# No-primary-key lookup used to expose shared expression buffer aliasing at batch size one.
+create table presence_sorted_heap(id int, content text, fulltext index ft(content) with parser beng);
+insert into presence_sorted_heap select * from presence_sorted_runs order by id;
+select /*+ opt_param('ROWSETS_MAX_ROWS',1) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_heap where match(content) against('alpha beta gamma');
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_heap where match(content) against('alpha beta gamma');
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_heap where match(content) against('alpha beta gamma');
+# Reuse changes the dimensions and consumes an OFFSET entirely inside a long run.
+prepare presence_sorted_stmt from 'select count(*) from (select id from presence_sorted_runs where match(content) against(?) limit ? offset ?) v';
+set @presence_sorted_words='alpha beta',@presence_sorted_limit=65,@presence_sorted_offset=64;
+execute presence_sorted_stmt using @presence_sorted_words,@presence_sorted_limit,@presence_sorted_offset;
+set @presence_sorted_words='alpha',@presence_sorted_limit=32,@presence_sorted_offset=31;
+execute presence_sorted_stmt using @presence_sorted_words,@presence_sorted_limit,@presence_sorted_offset;
+set @presence_sorted_words='missingword',@presence_sorted_limit=32,@presence_sorted_offset=0;
+execute presence_sorted_stmt using @presence_sorted_words,@presence_sorted_limit,@presence_sorted_offset;
+deallocate prepare presence_sorted_stmt;
+# Snapshot filtering still belongs to each posting scan, including changed run boundaries.
+start transaction;
+update presence_sorted_runs set content='gamma' where id in (1,64,128,160);
+delete from presence_sorted_runs where id in (65,129,192);
+insert into presence_sorted_runs values(196,'alpha beta');
+select /*+ opt_param('ROWSETS_MAX_ROWS',7) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta');
+select count(*),sum(id),sum(id*id),bit_xor(id) from presence_sorted_runs
+  where content like '%alpha%' or content like '%beta%';
+rollback;
+select /*+ opt_param('ROWSETS_MAX_ROWS',128) */ count(*),sum(id),sum(id*id),bit_xor(id)
+  from presence_sorted_runs where match(content) against('alpha beta');
+drop table presence_sorted_heap;
+drop table presence_sorted_runs;
+drop table presence_sorted_digits;

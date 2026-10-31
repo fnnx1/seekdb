@@ -1,0 +1,63 @@
+{
+  "baseline_commit": "6f3dc40b57c08a908f1bdece60e7e58c3f309ca2",
+  "measurement_order": [
+    "round2-baseline-paired",
+    "round2-candidate5",
+    "round2-candidate5-repeat",
+    "round2-baseline-reverse"
+  ],
+  "metrics": {
+    "build_ik_all_sec": {
+      "baseline_mean": 6.566000000000001,
+      "candidate_mean": 6.167,
+      "reduction_percent": 6.0767590618337035
+    },
+    "build_ik_content_sec": {
+      "baseline_mean": 4.9915,
+      "candidate_mean": 5.125,
+      "reduction_percent": -2.6745467294400527
+    },
+    "build_beng_en_sec": {
+      "baseline_mean": 2.885,
+      "candidate_mean": 2.737,
+      "reduction_percent": 5.129982668977462
+    },
+    "tokenize_ik_avg_ms": {
+      "baseline_mean": 0.1553,
+      "candidate_mean": 0.1499,
+      "reduction_percent": 3.4771410173856987
+    },
+    "tokenize_beng_avg_ms": {
+      "baseline_mean": 0.10935,
+      "candidate_mean": 0.1128,
+      "reduction_percent": -3.1550068587105518
+    },
+    "query_cn_avg_ms": {
+      "baseline_mean": 0.71475,
+      "candidate_mean": 0.73035,
+      "reduction_percent": -2.18258132214062
+    },
+    "query_beng_avg_ms": {
+      "baseline_mean": 0.9473,
+      "candidate_mean": 0.95265,
+      "reduction_percent": -0.564763010661884
+    },
+    "query_mixed_avg_ms": {
+      "baseline_mean": 0.79515,
+      "candidate_mean": 0.7783,
+      "reduction_percent": 2.1190970257184194
+    },
+    "query_limit_avg_ms": {
+      "baseline_mean": 1.8067,
+      "candidate_mean": 1.6058,
+      "reduction_percent": 11.119721038357234
+    }
+  },
+  "category_reduction_percent": {
+    "build": 2.8440650004570376,
+    "tokenize": 0.16106707933757347,
+    "query": 2.6228684328182874
+  },
+  "caution": "Local previous-version comparison, not the platform scoring baseline. All four final measurements retained, including regressions and host noise.",
+  "mean_category_reduction_percent": 1.8760001708709662
+}

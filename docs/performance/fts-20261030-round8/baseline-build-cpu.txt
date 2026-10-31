@@ -1,0 +1,105 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 5K of event 'cpu-clock:u'
+# Event count (approx.): 11324649208
+#
+# Overhead  Command          Shared Object           Symbol
+# ........  ...............  ......................  ................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     8.12%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObSortOpImpl::Compare::operator()(oceanbase::sql::ObChunkDatumStore::StoredRow const*, oceanbase::sql::ObChunkDatumStore::StoredRow const*)
+     3.36%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::crc64_sse42(unsigned long, char const*, long)
+     3.10%  PX_G0            libc.so.6               [.] __memmove_avx_unaligned_erms
+     2.44%  PX_G0            libc.so.6               [.] __memcmp_avx2_movbe
+     1.84%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObIArrayWrap<oceanbase::sql::ObOptParamHint::OptParamType>::at(long) const
+     1.77%  PX_G0            seekdb-round8-baseline  [.] ZSTD_compressBlock_fast
+     1.72%  PX_G0            seekdb-round8-baseline  [.] ZSTD_decompressSequences_bmi2
+     1.52%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObIArrayWrap<int (*)(oceanbase::common::ObDatum const&, oceanbase::common::ObDatum const&, int&, oceanbase::common::ObDatumAccessContext const*)>::at(long) const
+     1.19%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObFTRangeDict::find_first_char_range(oceanbase::common::ObString const&, oceanbase::storage::ObIFTDict*&) const
+     1.15%  PX_G0            libc.so.6               [.] __memset_avx2_unaligned_erms
+     1.15%  PX_G0            seekdb-round8-baseline  [.] ZSTD_encodeSequences_bmi2
+     1.11%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObOperator::get_next_batch(long, oceanbase::sql::ObBatchRows const*&)
+     1.03%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMicroBlockEncoder::copy_cell(oceanbase::share::schema::ObColDesc const&, oceanbase::blocksstable::ObStorageDatum const&, oceanbase::common::ObDatum&, long&, bool&, bool&)
+     1.01%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObOperator::get_next_row()
+     0.99%  PX_G0            seekdb-round8-baseline  [.] ob_strnncollsp_utf8mb4(ObCharsetInfo const*, unsigned char const*, unsigned long, unsigned char const*, unsigned long, bool)
+     0.87%  PX_G0            seekdb-round8-baseline  [.] ob_mb_wc_utf8mb4(ObCharsetInfo const*, unsigned long*, unsigned char const*, unsigned char const*)
+     0.85%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObCharset::get_charset(oceanbase::common::ObCollationType)
+     0.81%  PX_G0            seekdb-round8-baseline  [.] int oceanbase::sql::ObCompactBlockReader::get_stored_row<unsigned short>(oceanbase::sql::ObChunkDatumStore::StoredRow*&)
+     0.81%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObIIKProcessor::process(oceanbase::storage::TokenizeContext&, char const*, unsigned char, oceanbase::storage::ObFTCharUtil::CharType)
+     0.80%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObCharset::is_argument_valid(oceanbase::common::ObCollationType const&, char const*, long, char const*, long)
+     0.78%  PX_G0            seekdb-round8-baseline  [.] int oceanbase::sql::ObCompactBlockWriter::inner_process_datum<unsigned short>(oceanbase::common::ObDatum const&, long, oceanbase::sql::ChunkRowMeta const&, oceanbase::sql::ObCompactBlockWriter::CurRowInfo&)
+     0.76%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObStorageDatumBuffer::ObStorageDatumBuffer(oceanbase::common::ObIAllocator*)
+     0.76%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObFTDATReader<void>::match_with_hit(oceanbase::common::ObString const&, oceanbase::storage::ObDATrieHit const&, oceanbase::storage::ObDATrieHit&) const
+     0.73%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObCharset::strcmp(oceanbase::common::ObCollationType, oceanbase::common::ObString const&, oceanbase::common::ObString const&)
+     0.69%  PX_G0            seekdb-round8-baseline  [.] int oceanbase::blocksstable::ObMicroBlockChecksumHelper::cal_row_checksum<oceanbase::blocksstable::ObStorageDatum>(oceanbase::blocksstable::ObStorageDatum const*, long)
+     0.69%  TbltMetaUp0      [vdso]                  [.] __vdso_gettimeofday
+     0.67%  PX_G0            seekdb-round8-baseline  [.] long oceanbase::blocksstable::ObIntArrayFuncTable::upper_bound<unsigned short>(void const*, long, long, long)
+     0.67%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObEncodingHashTableBuilder::add_to_table(oceanbase::common::ObDatum const&, long, long)
+     0.65%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObArrayHashMap::find(oceanbase::storage::ObFTSingleWord const&, int&) const
+     0.64%  PX_G0            seekdb-round8-baseline  [.] memcpy@plt
+     0.64%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObCharset::get_charset_uninit(oceanbase::common::ObCollationType)
+     0.60%  PX_G0            seekdb-round8-baseline  [.] ob_hash_sort_utf8mb4(ObCharsetInfo const*, unsigned char const*, unsigned long, unsigned long*, unsigned long*, bool, unsigned long (*)(void const*, unsigned long, unsigned long))
+     0.60%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObChunkDatumStore::BlockBufferWrap::append_row(oceanbase::common::ObIArray<oceanbase::sql::ObExpr*> const&, oceanbase::sql::ObEvalCtx*, long)
+     0.58%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObAddWord::groupby_word(oceanbase::storage::ObFTWord const&, long)
+     0.57%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObEncodingHashTableBuilder::build(oceanbase::blocksstable::ObPodFix2dArray<oceanbase::common::ObDatum, 1048576l, 7936l> const&, oceanbase::share::schema::ObColDesc const&)
+     0.57%  PX_G0            seekdb-round8-baseline  [.] void oceanbase::sql::ObChunkDatumStore::Iterator::attach_rows<false>(oceanbase::common::ObIArray<oceanbase::sql::ObExpr*> const&, oceanbase::sql::ObEvalCtx&, oceanbase::sql::ObChunkDatumStore::StoredRow const**, long)
+     0.55%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMicroBlockEncoder::pivot()
+     0.55%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObBitVectorImpl<unsigned long>::at(long) const
+     0.55%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObPxMultiPartSSTableInsertOp::get_tablet_info_from_row(oceanbase::common::ObIArray<oceanbase::sql::ObExpr*> const&, oceanbase::common::ObTabletID&, oceanbase::storage::ObTabletSliceParam*)
+     0.53%  PX_G0            seekdb-round8-baseline  [.] int oceanbase::sql::ObCompactBlockWriter::inner_add_row<unsigned short>(oceanbase::common::ObIArray<oceanbase::sql::ObExpr*> const&, oceanbase::sql::ObEvalCtx&)
+     0.51%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::PageArena<char, oceanbase::common::ModulePageAllocator>::_alloc_aligned(long, long)
+     0.51%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObIKFTParser::process_next_batch()
+     0.50%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObRsSliceWriter::append_current_row(oceanbase::common::ObIArray<oceanbase::common::ObDatum*> const&)
+     0.48%  PX_G0            seekdb-round8-baseline  [.] ob_strnncoll_mb_bin(ObCharsetInfo const*, unsigned char const*, unsigned long, unsigned char const*, unsigned long, bool)
+     0.48%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObDefaultHash::hash(void const*, unsigned long, unsigned long)
+     0.48%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObFTCharUtil::classify_first_char(oceanbase::common::ObCollationType, char const*, unsigned char, oceanbase::storage::ObFTCharUtil::CharType&)
+     0.42%  PX_G0            seekdb-round8-baseline  [.] void std::__introsort_loop<oceanbase::sql::ObChunkDatumStore::StoredRow**, long, __gnu_cxx::__ops::_Iter_comp_iter<oceanbase::sql::ObSortOpImpl::CopyableComparer> >(oceanbase::sql::ObChunkDatumStore::StoredRow**, oceanbase::sql::ObChunkDatumStore::StoredRow**, long, __gnu_cxx::__ops::_Iter_comp_iter<oceanbase::sql::ObSortOpImpl::CopyableComparer>)
+     0.41%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMicroBlockEncoder::copy_and_append_row(oceanbase::blocksstable::ObDatumRow const&, long&)
+     0.41%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObIArrayWrap<oceanbase::common::hash::ObHashSet<unsigned long, oceanbase::common::hash::NoPthreadDefendMode, oceanbase::common::hash::hash_func<unsigned long>, oceanbase::common::hash::equal_to<unsigned long>, oceanbase::common::hash::SimpleAllocer<oceanbase::common::hash::ObHashTableNode<oceanbase::common::hash::HashMapPair<unsigned long, oceanbase::common::hash::HashNullObj> >, 108, oceanbase::common::hash::SpinMutexDefendMode, oceanbase::common::hash::DefaultSimpleAllocerAllocator>, oceanbase::common::hash::NormalPointer, oceanbase::common::ObMalloc, 1l>*>::at(long)
+     0.39%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObCompactBlockReader::get_row(oceanbase::sql::ObChunkDatumStore::StoredRow const*&)
+     0.37%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObIKCJKProcessor::do_process(oceanbase::storage::TokenizeContext&, char const*, unsigned char, oceanbase::storage::ObFTCharUtil::CharType)
+     0.35%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::DefHashFunc<oceanbase::common::DatumStrHashCalculator<(oceanbase::common::ObCollationType)46, true, oceanbase::common::ObMurmurHash, false> >::hash_v2_batch(unsigned long*, oceanbase::common::ObDatum*, bool, oceanbase::sql::ObBitVectorImpl<unsigned long> const&, long, unsigned long const*, bool, oceanbase::common::ObDatumAccessContext const*)
+     0.34%  DDLTaskExecutor  seekdb-round8-baseline  [.] oceanbase::sql::ObSysVarFactory::create_all_sys_vars_()
+     0.34%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObDatumRowkey::compare(oceanbase::blocksstable::ObDatumRowkey const&, oceanbase::blocksstable::ObStorageDatumUtils const&, int&, bool) const
+     0.34%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMacroBlockWriter::append_row(oceanbase::blocksstable::ObDatumRow const&, long)
+     0.34%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMacroBlockWriter::save_last_key(oceanbase::blocksstable::ObDatumRowkey const&)
+     0.34%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMicroBlockEncoder::append_row(oceanbase::blocksstable::ObDatumRow const&)
+     0.34%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObCharset::strcmpsp(oceanbase::common::ObCollationType, char const*, long, char const*, long, bool)
+     0.34%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObDASDomainUtils::generate_fulltext_word_rows(oceanbase::common::ObIAllocator&, oceanbase::storage::ObFTParseHelper*, oceanbase::common::ObObjMeta const&, oceanbase::common::ObDatum const&, oceanbase::common::ObString const&, bool, oceanbase::common::ObSEArray<oceanbase::blocksstable::ObDatumRow*, 32l, oceanbase::common::ModulePageAllocator, false>&)
+     0.34%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObPxMultiPartSSTableInsertOp::eval_current_row(oceanbase::common::ObIArray<oceanbase::common::ObDatum*>&)
+     0.32%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::load_data_to_datum(oceanbase::common::ObObjType const&, char const*, long, long, oceanbase::common::ObDatum&)
+     0.32%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObDatum::from_storage_datum(oceanbase::common::ObDatum const&, oceanbase::common::ObObjDatumMapType, bool)
+     0.30%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObPxMultiPartSSTableInsertOp::write_ordered_slice_by_row()
+     0.28%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMicroBlockChecksumHelper::cal_column_checksum(oceanbase::blocksstable::ObDatumRow const&, long*)
+     0.28%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::TCRWLock::wrlock(long)
+     0.28%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObCompactBlockWriter::ensure_write(oceanbase::sql::ObChunkDatumStore::StoredRow const&)
+     0.28%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObTableScanOp::inner_get_next_fts_index_batch(long)
+     0.28%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObFTSortList::add_token(oceanbase::storage::ObIKToken const&)
+     0.27%  PX_G0            seekdb-round8-baseline  [.] ZSTD_compressBlock_internal
+     0.27%  PX_G0            seekdb-round8-baseline  [.] ob_well_formed_len_utf8mb4(ObCharsetInfo const*, char const*, char const*, unsigned long, int*)
+     0.27%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMicroBlockDecoder::get_row(long, oceanbase::blocksstable::ObDatumRow&)
+     0.27%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObIArrayWrap<oceanbase::data_plane::ObSparseVectorBlockColumnSpec>::at(long) const
+     0.27%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObNullSafeDatumStrCmp<(oceanbase::common::ObCollationType)45, false, true>::cmp(oceanbase::common::ObDatum const&, oceanbase::common::ObDatum const&, int&, oceanbase::common::ObDatumAccessContext const*)
+     0.27%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObBatchResultHolder::restore()
+     0.27%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObBatchResultHolder::save(long)
+     0.27%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObCompactBlockWriter::get_row_stored_size(oceanbase::common::ObIArray<oceanbase::sql::ObExpr*> const&, oceanbase::sql::ObEvalCtx&, unsigned long&)
+     0.25%  PX_G0            seekdb-round8-baseline  [.] oceanbase::blocksstable::ObMacroBlockWriter::check_order(oceanbase::blocksstable::ObDatumRow const&)
+     0.25%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObBinaryHeap<oceanbase::sql::ObSortOpChunk*, oceanbase::sql::ObSortOpImpl::Compare, 256l>::downheap(long)
+     0.25%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObIKArbitrator::output_result(oceanbase::storage::TokenizeContext&)
+     0.25%  TbltMetaUp0      seekdb-round8-baseline  [.] oceanbase::common::ObIOHandle::reset()
+     0.23%  PX_G0            seekdb-round8-baseline  [.] HIST_count_parallel_wksp
+     0.23%  PX_G0            seekdb-round8-baseline  [.] int oceanbase::sql::ObCompactBlockWriter::inner_build_from_stored_row<unsigned short>(oceanbase::sql::ObChunkDatumStore::StoredRow const&)
+     0.23%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::PageArena<char, oceanbase::common::ModulePageAllocator>::reuse()
+     0.23%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObSortOpImpl::before_add_row()
+     0.21%  PX_G0            seekdb-round8-baseline  [.] oceanbase::common::ObIArrayWrap<oceanbase::sql::(anonymous namespace)::ObScalarPushdownAggregateSpec>::at(long)
+     0.21%  PX_G0            seekdb-round8-baseline  [.] oceanbase::sql::ObChunkDatumStore::Block::swizzling(long*)
+     0.21%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObIKLetterProcessor::process_english_letter(oceanbase::storage::TokenizeContext&, char const*, unsigned char, oceanbase::storage::ObFTCharUtil::CharType)
+     0.21%  PX_G0            seekdb-round8-baseline  [.] oceanbase::storage::ObIKQuantifierProcessor::do_process(oceanbase::storage::TokenizeContext&, char const*, unsigned char, oceanbase::storage::ObFTCharUtil::CharType)
+     0.21%  PX_G0            seekdb-round8-baseline  [.] std::enable_if<((((oceanbase::common::ObCharsetType)2)==((oceanbase::common::ObCharsetType)2))||(((oceanbase::common::ObCharsetType)2)==((oceanbase::common::ObCharsetType)4)))||(((oceanbase::common::ObCharsetType)2)==((oceanbase::common::ObCharsetType)10)), int>::type oceanbase::storage::ObFTCharUtil::decode_unicode<(oceanbase::common::ObCharsetType)2>(char const*, unsigned char, unsigned long&)
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

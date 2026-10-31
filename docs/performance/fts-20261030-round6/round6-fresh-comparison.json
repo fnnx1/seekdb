@@ -1,0 +1,1403 @@
+{
+  "prefix": "round6-fresh",
+  "run_order": [
+    "old1",
+    "new1",
+    "new2",
+    "old2"
+  ],
+  "method": "For each metric: 1 - mean(new1,new2)/mean(old1,old2). Average within each category, then equally across three categories.",
+  "samples_removed": 0,
+  "select1_subtracted": false,
+  "scope": "Local version comparison only; platform baseline and score are not inferred.",
+  "configuration": {
+    "rows": {
+      "old1": 20000.0,
+      "new1": 20000.0,
+      "new2": 20000.0,
+      "old2": 20000.0
+    },
+    "batch": {
+      "old1": 500.0,
+      "new1": 500.0,
+      "new2": 500.0,
+      "old2": 500.0
+    },
+    "rounds": {
+      "old1": 3000.0,
+      "new1": 3000.0,
+      "new2": 3000.0,
+      "old2": 3000.0
+    },
+    "query_rounds": {
+      "old1": 200.0,
+      "new1": 200.0,
+      "new2": 200.0,
+      "old2": 200.0
+    },
+    "samples": {
+      "old1": 3.0,
+      "new1": 3.0,
+      "new2": 3.0,
+      "old2": 3.0
+    },
+    "warmup": {
+      "old1": 30.0,
+      "new1": 30.0,
+      "new2": 30.0,
+      "old2": 30.0
+    },
+    "skip_load": {
+      "old1": 0.0,
+      "new1": 0.0,
+      "new2": 0.0,
+      "old2": 0.0
+    }
+  },
+  "hit_checks": {
+    "query_cn_hits": {
+      "values": {
+        "old1": 8001.0,
+        "new1": 8001.0,
+        "new2": 8001.0,
+        "old2": 8001.0
+      },
+      "all_equal": true
+    },
+    "query_beng_hits": {
+      "values": {
+        "old1": 11000.0,
+        "new1": 11000.0,
+        "new2": 11000.0,
+        "old2": 11000.0
+      },
+      "all_equal": true
+    },
+    "query_mixed_hits": {
+      "values": {
+        "old1": 7332.0,
+        "new1": 7332.0,
+        "new2": 7332.0,
+        "old2": 7332.0
+      },
+      "all_equal": true
+    },
+    "query_limit_hits": {
+      "values": {
+        "old1": 20.0,
+        "new1": 20.0,
+        "new2": 20.0,
+        "old2": 20.0
+      },
+      "all_equal": true
+    }
+  },
+  "all_hits_equal": true,
+  "metrics": {
+    "build_ik_all_sec": {
+      "category": "build",
+      "old": [
+        5.874,
+        5.975
+      ],
+      "new": [
+        5.872,
+        6.235
+      ],
+      "old_mean": 5.9245,
+      "new_mean": 6.0535,
+      "improvement": -0.021773989366191165,
+      "improvement_percent": -2.1773989366191167
+    },
+    "build_ik_content_sec": {
+      "category": "build",
+      "old": [
+        4.489,
+        4.137
+      ],
+      "new": [
+        4.035,
+        4.038
+      ],
+      "old_mean": 4.313,
+      "new_mean": 4.0365,
+      "improvement": 0.06410850915835835,
+      "improvement_percent": 6.410850915835835
+    },
+    "build_beng_en_sec": {
+      "category": "build",
+      "old": [
+        2.23,
+        2.336
+      ],
+      "new": [
+        2.23,
+        2.236
+      ],
+      "old_mean": 2.283,
+      "new_mean": 2.233,
+      "improvement": 0.021901007446342456,
+      "improvement_percent": 2.1901007446342455
+    },
+    "tokenize_ik_avg_ms": {
+      "category": "tokenize",
+      "old": [
+        0.1392,
+        0.1912
+      ],
+      "new": [
+        0.1421,
+        0.1402
+      ],
+      "old_mean": 0.1652,
+      "new_mean": 0.14115,
+      "improvement": 0.14558111380145286,
+      "improvement_percent": 14.558111380145286
+    },
+    "tokenize_beng_avg_ms": {
+      "category": "tokenize",
+      "old": [
+        0.1095,
+        0.1108
+      ],
+      "new": [
+        0.1085,
+        0.1093
+      ],
+      "old_mean": 0.11015,
+      "new_mean": 0.1089,
+      "improvement": 0.011348161597821163,
+      "improvement_percent": 1.1348161597821163
+    },
+    "query_cn_avg_ms": {
+      "category": "query",
+      "old": [
+        0.5313,
+        0.5205
+      ],
+      "new": [
+        0.4777,
+        0.4794
+      ],
+      "old_mean": 0.5259,
+      "new_mean": 0.47855000000000003,
+      "improvement": 0.09003612854154783,
+      "improvement_percent": 9.003612854154783
+    },
+    "query_beng_avg_ms": {
+      "category": "query",
+      "old": [
+        0.7043,
+        0.6988
+      ],
+      "new": [
+        0.6317,
+        0.6313
+      ],
+      "old_mean": 0.70155,
+      "new_mean": 0.6315,
+      "improvement": 0.09985033140902295,
+      "improvement_percent": 9.985033140902296
+    },
+    "query_mixed_avg_ms": {
+      "category": "query",
+      "old": [
+        0.5603,
+        0.5606
+      ],
+      "new": [
+        0.5126,
+        0.5232
+      ],
+      "old_mean": 0.56045,
+      "new_mean": 0.5179,
+      "improvement": 0.07592113480239089,
+      "improvement_percent": 7.592113480239089
+    },
+    "query_limit_avg_ms": {
+      "category": "query",
+      "old": [
+        0.2317,
+        0.2307
+      ],
+      "new": [
+        0.2382,
+        0.2341
+      ],
+      "old_mean": 0.2312,
+      "new_mean": 0.23615,
+      "improvement": -0.021410034602076168,
+      "improvement_percent": -2.141003460207617
+    }
+  },
+  "categories": {
+    "build": {
+      "metrics": [
+        "build_ik_all_sec",
+        "build_ik_content_sec",
+        "build_beng_en_sec"
+      ],
+      "mean_improvement": 0.021411842412836547,
+      "mean_improvement_percent": 2.141184241283655
+    },
+    "tokenize": {
+      "metrics": [
+        "tokenize_ik_avg_ms",
+        "tokenize_beng_avg_ms"
+      ],
+      "mean_improvement": 0.07846463769963702,
+      "mean_improvement_percent": 7.846463769963702
+    },
+    "query": {
+      "metrics": [
+        "query_cn_avg_ms",
+        "query_beng_avg_ms",
+        "query_mixed_avg_ms",
+        "query_limit_avg_ms"
+      ],
+      "mean_improvement": 0.06109939003772138,
+      "mean_improvement_percent": 6.109939003772138
+    }
+  },
+  "mean_category_improvement": 0.053658623383398316,
+  "mean_category_improvement_percent": 5.365862338339832,
+  "unweighted_nine_metric_mean_improvement": 0.05172915142096324,
+  "runs": {
+    "old1": {
+      "path": "C:\\Users\\Lenovo\\Desktop\\2026_OceanBase数据库大赛解题\\12_seekdb_全文索引调优\\validation-20261030\\round6-fresh-old1-benchmark.txt",
+      "sha256": "66b60fd6c0ad895f02d5b10a5ec4ea921c8c874416ec3470198beb5505a5cff3",
+      "metadata": {
+        "timestamp": "2026-10-30 16:39:01",
+        "label": "round6-fresh-old1",
+        "git_head": "e6bfff547"
+      },
+      "metrics": {
+        "rows": 20000.0,
+        "batch": 500.0,
+        "rounds": 3000.0,
+        "query_rounds": 200.0,
+        "samples": 3.0,
+        "warmup": 30.0,
+        "skip_load": 0.0,
+        "query_cn_hits": 8001.0,
+        "query_beng_hits": 11000.0,
+        "query_mixed_hits": 7332.0,
+        "query_limit_hits": 20.0,
+        "build_ik_all_sec": 5.874,
+        "build_ik_content_sec": 4.489,
+        "build_beng_en_sec": 2.23,
+        "tokenize_ik_avg_ms": 0.1392,
+        "tokenize_beng_avg_ms": 0.1095,
+        "query_cn_avg_ms": 0.5313,
+        "query_beng_avg_ms": 0.7043,
+        "query_mixed_avg_ms": 0.5603,
+        "query_limit_avg_ms": 0.2317,
+        "git_dirty": 1.0,
+        "select1_avg_ms": 0.0919,
+        "select1_stdev_ms": 0.002,
+        "raw_load_sec": 0.257,
+        "raw_load_rows_per_sec": 77821.0,
+        "build_total_sec": 12.606,
+        "tokenize_ik_median_ms": 0.1384,
+        "tokenize_ik_stdev_ms": 0.0014,
+        "tokenize_beng_median_ms": 0.108,
+        "tokenize_beng_stdev_ms": 0.0025,
+        "query_cn_stdev_ms": 0.0051,
+        "query_beng_stdev_ms": 0.0061,
+        "query_mixed_stdev_ms": 0.0108,
+        "query_limit_stdev_ms": 0.0028
+      },
+      "raw_log": {
+        "available": true,
+        "path": "C:\\Users\\Lenovo\\Desktop\\2026_OceanBase数据库大赛解题\\12_seekdb_全文索引调优\\validation-20261030\\round6-fresh-old1-benchmark.log",
+        "sha256": "1e665714fea5738f9c4de58c89077e7e7ce8b2b64dbdae25e67497ff5a0aa668",
+        "note": "Benchmark stdev uses divisor N (population); printed sample averages are rounded to 4 decimals.",
+        "metrics": {
+          "select1": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 268.733,
+                "avg_ms": 0.0896,
+                "raw_line": "select1: sample=1/3 rounds=3000 total_ms=268.733 avg_ms=0.0896"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 274.439,
+                "avg_ms": 0.0915,
+                "raw_line": "select1: sample=2/3 rounds=3000 total_ms=274.439 avg_ms=0.0915"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 283.421,
+                "avg_ms": 0.0945,
+                "raw_line": "select1: sample=3/3 rounds=3000 total_ms=283.421 avg_ms=0.0945"
+              }
+            ],
+            "reported_mean_ms": 0.0919,
+            "reported_stdev_ms": 0.002,
+            "recomputed_mean_from_printed_averages_ms": 0.09186666666666667,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.00201714870272097,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.002470492528491705
+          },
+          "tokenize_ik": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 415.23,
+                "avg_ms": 0.1384,
+                "raw_line": "tokenize_ik: sample=1/3 rounds=3000 total_ms=415.230 avg_ms=0.1384"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 414.097,
+                "avg_ms": 0.138,
+                "raw_line": "tokenize_ik: sample=2/3 rounds=3000 total_ms=414.097 avg_ms=0.1380"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 423.63,
+                "avg_ms": 0.1412,
+                "raw_line": "tokenize_ik: sample=3/3 rounds=3000 total_ms=423.630 avg_ms=0.1412"
+              }
+            ],
+            "reported_mean_ms": 0.1392,
+            "reported_stdev_ms": 0.0014,
+            "recomputed_mean_from_printed_averages_ms": 0.1392,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.001423610433604169,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0017435595774162622
+          },
+          "tokenize_beng": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 339.029,
+                "avg_ms": 0.113,
+                "raw_line": "tokenize_beng: sample=1/3 rounds=3000 total_ms=339.029 avg_ms=0.1130"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 322.79,
+                "avg_ms": 0.1076,
+                "raw_line": "tokenize_beng: sample=2/3 rounds=3000 total_ms=322.790 avg_ms=0.1076"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 324.118,
+                "avg_ms": 0.108,
+                "raw_line": "tokenize_beng: sample=3/3 rounds=3000 total_ms=324.118 avg_ms=0.1080"
+              }
+            ],
+            "reported_mean_ms": 0.1095,
+            "reported_stdev_ms": 0.0025,
+            "recomputed_mean_from_printed_averages_ms": 0.10953333333333333,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.002456736769691772,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0030088757590391374
+          },
+          "query_cn": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 106.905,
+                "avg_ms": 0.5345,
+                "raw_line": "query_cn: sample=1/3 rounds=200 total_ms=106.905 avg_ms=0.5345"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 107.079,
+                "avg_ms": 0.5354,
+                "raw_line": "query_cn: sample=2/3 rounds=200 total_ms=107.079 avg_ms=0.5354"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 104.814,
+                "avg_ms": 0.5241,
+                "raw_line": "query_cn: sample=3/3 rounds=200 total_ms=104.814 avg_ms=0.5241"
+              }
+            ],
+            "reported_mean_ms": 0.5313,
+            "reported_stdev_ms": 0.0051,
+            "recomputed_mean_from_printed_averages_ms": 0.5313333333333333,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.005127919222799382,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.006280392769033886
+          },
+          "query_beng": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 141.358,
+                "avg_ms": 0.7068,
+                "raw_line": "query_beng: sample=1/3 rounds=200 total_ms=141.358 avg_ms=0.7068"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 139.182,
+                "avg_ms": 0.6959,
+                "raw_line": "query_beng: sample=2/3 rounds=200 total_ms=139.182 avg_ms=0.6959"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 142.057,
+                "avg_ms": 0.7103,
+                "raw_line": "query_beng: sample=3/3 rounds=200 total_ms=142.057 avg_ms=0.7103"
+              }
+            ],
+            "reported_mean_ms": 0.7043,
+            "reported_stdev_ms": 0.0061,
+            "recomputed_mean_from_printed_averages_ms": 0.7043333333333334,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.006132065086267641,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0075102152654457155
+          },
+          "query_mixed": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 109.267,
+                "avg_ms": 0.5463,
+                "raw_line": "query_mixed: sample=1/3 rounds=200 total_ms=109.267 avg_ms=0.5463"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 112.376,
+                "avg_ms": 0.5619,
+                "raw_line": "query_mixed: sample=2/3 rounds=200 total_ms=112.376 avg_ms=0.5619"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 114.52,
+                "avg_ms": 0.5726,
+                "raw_line": "query_mixed: sample=3/3 rounds=200 total_ms=114.520 avg_ms=0.5726"
+              }
+            ],
+            "reported_mean_ms": 0.5603,
+            "reported_stdev_ms": 0.0108,
+            "recomputed_mean_from_printed_averages_ms": 0.5602666666666667,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.010798868253458573,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.013225858510256833
+          },
+          "query_limit": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 45.594,
+                "avg_ms": 0.228,
+                "raw_line": "query_limit: sample=1/3 rounds=200 total_ms=45.594 avg_ms=0.2280"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 46.527,
+                "avg_ms": 0.2326,
+                "raw_line": "query_limit: sample=2/3 rounds=200 total_ms=46.527 avg_ms=0.2326"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 46.915,
+                "avg_ms": 0.2346,
+                "raw_line": "query_limit: sample=3/3 rounds=200 total_ms=46.915 avg_ms=0.2346"
+              }
+            ],
+            "reported_mean_ms": 0.2317,
+            "reported_stdev_ms": 0.0028,
+            "recomputed_mean_from_printed_averages_ms": 0.23173333333333335,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.002763250903475025,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0033842773723992115
+          }
+        }
+      }
+    },
+    "new1": {
+      "path": "C:\\Users\\Lenovo\\Desktop\\2026_OceanBase数据库大赛解题\\12_seekdb_全文索引调优\\validation-20261030\\round6-fresh-new1-benchmark.txt",
+      "sha256": "44b645bb204782affbf8d193c9e8994e37bd10ea1db859887180367fee85138e",
+      "metadata": {
+        "timestamp": "2026-10-30 16:39:22",
+        "label": "round6-fresh-new1",
+        "git_head": "e6bfff547"
+      },
+      "metrics": {
+        "rows": 20000.0,
+        "batch": 500.0,
+        "rounds": 3000.0,
+        "query_rounds": 200.0,
+        "samples": 3.0,
+        "warmup": 30.0,
+        "skip_load": 0.0,
+        "query_cn_hits": 8001.0,
+        "query_beng_hits": 11000.0,
+        "query_mixed_hits": 7332.0,
+        "query_limit_hits": 20.0,
+        "build_ik_all_sec": 5.872,
+        "build_ik_content_sec": 4.035,
+        "build_beng_en_sec": 2.23,
+        "tokenize_ik_avg_ms": 0.1421,
+        "tokenize_beng_avg_ms": 0.1085,
+        "query_cn_avg_ms": 0.4777,
+        "query_beng_avg_ms": 0.6317,
+        "query_mixed_avg_ms": 0.5126,
+        "query_limit_avg_ms": 0.2382,
+        "git_dirty": 1.0,
+        "select1_avg_ms": 0.0958,
+        "select1_stdev_ms": 0.0022,
+        "raw_load_sec": 0.262,
+        "raw_load_rows_per_sec": 76335.9,
+        "build_total_sec": 12.15,
+        "tokenize_ik_median_ms": 0.1428,
+        "tokenize_ik_stdev_ms": 0.0017,
+        "tokenize_beng_median_ms": 0.1076,
+        "tokenize_beng_stdev_ms": 0.0012,
+        "query_cn_stdev_ms": 0.0017,
+        "query_beng_stdev_ms": 0.0157,
+        "query_mixed_stdev_ms": 0.0088,
+        "query_limit_stdev_ms": 0.0024
+      },
+      "raw_log": {
+        "available": true,
+        "path": "C:\\Users\\Lenovo\\Desktop\\2026_OceanBase数据库大赛解题\\12_seekdb_全文索引调优\\validation-20261030\\round6-fresh-new1-benchmark.log",
+        "sha256": "2c9e290652200901f8fdf537b168b38786eeab6b87097e00204efebfaa708bb9",
+        "note": "Benchmark stdev uses divisor N (population); printed sample averages are rounded to 4 decimals.",
+        "metrics": {
+          "select1": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 295.724,
+                "avg_ms": 0.0986,
+                "raw_line": "select1: sample=1/3 rounds=3000 total_ms=295.724 avg_ms=0.0986"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 279.922,
+                "avg_ms": 0.0933,
+                "raw_line": "select1: sample=2/3 rounds=3000 total_ms=279.922 avg_ms=0.0933"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 286.739,
+                "avg_ms": 0.0956,
+                "raw_line": "select1: sample=3/3 rounds=3000 total_ms=286.739 avg_ms=0.0956"
+              }
+            ],
+            "reported_mean_ms": 0.0958,
+            "reported_stdev_ms": 0.0022,
+            "recomputed_mean_from_printed_averages_ms": 0.09583333333333333,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0021699974398346387,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0026576932353703517
+          },
+          "tokenize_ik": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 419.421,
+                "avg_ms": 0.1398,
+                "raw_line": "tokenize_ik: sample=1/3 rounds=3000 total_ms=419.421 avg_ms=0.1398"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 428.516,
+                "avg_ms": 0.1428,
+                "raw_line": "tokenize_ik: sample=2/3 rounds=3000 total_ms=428.516 avg_ms=0.1428"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 431.285,
+                "avg_ms": 0.1438,
+                "raw_line": "tokenize_ik: sample=3/3 rounds=3000 total_ms=431.285 avg_ms=0.1438"
+              }
+            ],
+            "reported_mean_ms": 0.1421,
+            "reported_stdev_ms": 0.0017,
+            "recomputed_mean_from_printed_averages_ms": 0.14213333333333333,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0016996731711975965,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0020816659994661348
+          },
+          "tokenize_beng": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 322.905,
+                "avg_ms": 0.1076,
+                "raw_line": "tokenize_beng: sample=1/3 rounds=3000 total_ms=322.905 avg_ms=0.1076"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 330.464,
+                "avg_ms": 0.1102,
+                "raw_line": "tokenize_beng: sample=2/3 rounds=3000 total_ms=330.464 avg_ms=0.1102"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 322.689,
+                "avg_ms": 0.1076,
+                "raw_line": "tokenize_beng: sample=3/3 rounds=3000 total_ms=322.689 avg_ms=0.1076"
+              }
+            ],
+            "reported_mean_ms": 0.1085,
+            "reported_stdev_ms": 0.0012,
+            "recomputed_mean_from_printed_averages_ms": 0.10846666666666667,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0012256517540566848,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.00150111069989303
+          },
+          "query_cn": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 95.264,
+                "avg_ms": 0.4763,
+                "raw_line": "query_cn: sample=1/3 rounds=200 total_ms=95.264 avg_ms=0.4763"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 96.014,
+                "avg_ms": 0.4801,
+                "raw_line": "query_cn: sample=2/3 rounds=200 total_ms=96.014 avg_ms=0.4801"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 95.366,
+                "avg_ms": 0.4768,
+                "raw_line": "query_cn: sample=3/3 rounds=200 total_ms=95.366 avg_ms=0.4768"
+              }
+            ],
+            "reported_mean_ms": 0.4777,
+            "reported_stdev_ms": 0.0017,
+            "recomputed_mean_from_printed_averages_ms": 0.47773333333333334,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.001685889148853584,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0020647840887931582
+          },
+          "query_beng": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 122.186,
+                "avg_ms": 0.6109,
+                "raw_line": "query_beng: sample=1/3 rounds=200 total_ms=122.186 avg_ms=0.6109"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 129.801,
+                "avg_ms": 0.649,
+                "raw_line": "query_beng: sample=2/3 rounds=200 total_ms=129.801 avg_ms=0.6490"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 127.021,
+                "avg_ms": 0.6351,
+                "raw_line": "query_beng: sample=3/3 rounds=200 total_ms=127.021 avg_ms=0.6351"
+              }
+            ],
+            "reported_mean_ms": 0.6317,
+            "reported_stdev_ms": 0.0157,
+            "recomputed_mean_from_printed_averages_ms": 0.6316666666666667,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.01574258202738322,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.019280646600499003
+          },
+          "query_mixed": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 105.017,
+                "avg_ms": 0.5251,
+                "raw_line": "query_mixed: sample=1/3 rounds=200 total_ms=105.017 avg_ms=0.5251"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 101.191,
+                "avg_ms": 0.506,
+                "raw_line": "query_mixed: sample=2/3 rounds=200 total_ms=101.191 avg_ms=0.5060"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 101.347,
+                "avg_ms": 0.5067,
+                "raw_line": "query_mixed: sample=3/3 rounds=200 total_ms=101.347 avg_ms=0.5067"
+              }
+            ],
+            "reported_mean_ms": 0.5126,
+            "reported_stdev_ms": 0.0088,
+            "recomputed_mean_from_printed_averages_ms": 0.5126000000000001,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.00884345332246779,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.010830974102083333
+          },
+          "query_limit": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 47.741,
+                "avg_ms": 0.2387,
+                "raw_line": "query_limit: sample=1/3 rounds=200 total_ms=47.741 avg_ms=0.2387"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 47.019,
+                "avg_ms": 0.2351,
+                "raw_line": "query_limit: sample=2/3 rounds=200 total_ms=47.019 avg_ms=0.2351"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 48.174,
+                "avg_ms": 0.2409,
+                "raw_line": "query_limit: sample=3/3 rounds=200 total_ms=48.174 avg_ms=0.2409"
+              }
+            ],
+            "reported_mean_ms": 0.2382,
+            "reported_stdev_ms": 0.0024,
+            "recomputed_mean_from_printed_averages_ms": 0.23823333333333332,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.002390722810272147,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.002928025500799699
+          }
+        }
+      }
+    },
+    "new2": {
+      "path": "C:\\Users\\Lenovo\\Desktop\\2026_OceanBase数据库大赛解题\\12_seekdb_全文索引调优\\validation-20261030\\round6-fresh-new2-benchmark.txt",
+      "sha256": "f87ed0d9bd63cf1fe53142f013afe1cdea3c153818c5b47d5f8ac70aabf1dccf",
+      "metadata": {
+        "timestamp": "2026-10-30 16:39:42",
+        "label": "round6-fresh-new2",
+        "git_head": "e6bfff547"
+      },
+      "metrics": {
+        "rows": 20000.0,
+        "batch": 500.0,
+        "rounds": 3000.0,
+        "query_rounds": 200.0,
+        "samples": 3.0,
+        "warmup": 30.0,
+        "skip_load": 0.0,
+        "query_cn_hits": 8001.0,
+        "query_beng_hits": 11000.0,
+        "query_mixed_hits": 7332.0,
+        "query_limit_hits": 20.0,
+        "build_ik_all_sec": 6.235,
+        "build_ik_content_sec": 4.038,
+        "build_beng_en_sec": 2.236,
+        "tokenize_ik_avg_ms": 0.1402,
+        "tokenize_beng_avg_ms": 0.1093,
+        "query_cn_avg_ms": 0.4794,
+        "query_beng_avg_ms": 0.6313,
+        "query_mixed_avg_ms": 0.5232,
+        "query_limit_avg_ms": 0.2341,
+        "git_dirty": 1.0,
+        "select1_avg_ms": 0.0909,
+        "select1_stdev_ms": 0.0012,
+        "raw_load_sec": 0.263,
+        "raw_load_rows_per_sec": 76045.6,
+        "build_total_sec": 12.525,
+        "tokenize_ik_median_ms": 0.1392,
+        "tokenize_ik_stdev_ms": 0.0022,
+        "tokenize_beng_median_ms": 0.1094,
+        "tokenize_beng_stdev_ms": 0.0027,
+        "query_cn_stdev_ms": 0.0029,
+        "query_beng_stdev_ms": 0.0041,
+        "query_mixed_stdev_ms": 0.0143,
+        "query_limit_stdev_ms": 0.0006
+      },
+      "raw_log": {
+        "available": true,
+        "path": "C:\\Users\\Lenovo\\Desktop\\2026_OceanBase数据库大赛解题\\12_seekdb_全文索引调优\\validation-20261030\\round6-fresh-new2-benchmark.log",
+        "sha256": "15b325e72ab6c5bf66e3983109554b6b7aba114cb8b5e5a59b9a66f08efb3397",
+        "note": "Benchmark stdev uses divisor N (population); printed sample averages are rounded to 4 decimals.",
+        "metrics": {
+          "select1": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 268.641,
+                "avg_ms": 0.0895,
+                "raw_line": "select1: sample=1/3 rounds=3000 total_ms=268.641 avg_ms=0.0895"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 272.113,
+                "avg_ms": 0.0907,
+                "raw_line": "select1: sample=2/3 rounds=3000 total_ms=272.113 avg_ms=0.0907"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 277.645,
+                "avg_ms": 0.0925,
+                "raw_line": "select1: sample=3/3 rounds=3000 total_ms=277.645 avg_ms=0.0925"
+              }
+            ],
+            "reported_mean_ms": 0.0909,
+            "reported_stdev_ms": 0.0012,
+            "recomputed_mean_from_printed_averages_ms": 0.0909,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0012328828005937962,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.001509966887054151
+          },
+          "tokenize_ik": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 414.712,
+                "avg_ms": 0.1382,
+                "raw_line": "tokenize_ik: sample=1/3 rounds=3000 total_ms=414.712 avg_ms=0.1382"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 417.717,
+                "avg_ms": 0.1392,
+                "raw_line": "tokenize_ik: sample=2/3 rounds=3000 total_ms=417.717 avg_ms=0.1392"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 429.63,
+                "avg_ms": 0.1432,
+                "raw_line": "tokenize_ik: sample=3/3 rounds=3000 total_ms=429.630 avg_ms=0.1432"
+              }
+            ],
+            "reported_mean_ms": 0.1402,
+            "reported_stdev_ms": 0.0022,
+            "recomputed_mean_from_printed_averages_ms": 0.1402,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0021602468994692888,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.002645751311064593
+          },
+          "tokenize_beng": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 328.112,
+                "avg_ms": 0.1094,
+                "raw_line": "tokenize_beng: sample=1/3 rounds=3000 total_ms=328.112 avg_ms=0.1094"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 337.574,
+                "avg_ms": 0.1125,
+                "raw_line": "tokenize_beng: sample=2/3 rounds=3000 total_ms=337.574 avg_ms=0.1125"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 317.849,
+                "avg_ms": 0.1059,
+                "raw_line": "tokenize_beng: sample=3/3 rounds=3000 total_ms=317.849 avg_ms=0.1059"
+              }
+            ],
+            "reported_mean_ms": 0.1093,
+            "reported_stdev_ms": 0.0027,
+            "recomputed_mean_from_printed_averages_ms": 0.10926666666666666,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0026960877005188294,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0033020195840323787
+          },
+          "query_cn": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 95.734,
+                "avg_ms": 0.4787,
+                "raw_line": "query_cn: sample=1/3 rounds=200 total_ms=95.734 avg_ms=0.4787"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 95.263,
+                "avg_ms": 0.4763,
+                "raw_line": "query_cn: sample=2/3 rounds=200 total_ms=95.263 avg_ms=0.4763"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 96.631,
+                "avg_ms": 0.4832,
+                "raw_line": "query_cn: sample=3/3 rounds=200 total_ms=96.631 avg_ms=0.4832"
+              }
+            ],
+            "reported_mean_ms": 0.4794,
+            "reported_stdev_ms": 0.0029,
+            "recomputed_mean_from_printed_averages_ms": 0.4794,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.002860069929215025,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.003502855977627407
+          },
+          "query_beng": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 127.139,
+                "avg_ms": 0.6357,
+                "raw_line": "query_beng: sample=1/3 rounds=200 total_ms=127.139 avg_ms=0.6357"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 126.499,
+                "avg_ms": 0.6325,
+                "raw_line": "query_beng: sample=2/3 rounds=200 total_ms=126.499 avg_ms=0.6325"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 125.151,
+                "avg_ms": 0.6258,
+                "raw_line": "query_beng: sample=3/3 rounds=200 total_ms=125.151 avg_ms=0.6258"
+              }
+            ],
+            "reported_mean_ms": 0.6313,
+            "reported_stdev_ms": 0.0041,
+            "recomputed_mean_from_printed_averages_ms": 0.6313333333333333,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.004124991582482995,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.005052062285179522
+          },
+          "query_mixed": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 101.07,
+                "avg_ms": 0.5053,
+                "raw_line": "query_mixed: sample=1/3 rounds=200 total_ms=101.070 avg_ms=0.5053"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 104.798,
+                "avg_ms": 0.524,
+                "raw_line": "query_mixed: sample=2/3 rounds=200 total_ms=104.798 avg_ms=0.5240"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 108.06,
+                "avg_ms": 0.5403,
+                "raw_line": "query_mixed: sample=3/3 rounds=200 total_ms=108.060 avg_ms=0.5403"
+              }
+            ],
+            "reported_mean_ms": 0.5232,
+            "reported_stdev_ms": 0.0143,
+            "recomputed_mean_from_printed_averages_ms": 0.5232,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.014299883449408498,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.017513708916160522
+          },
+          "query_limit": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 46.702,
+                "avg_ms": 0.2335,
+                "raw_line": "query_limit: sample=1/3 rounds=200 total_ms=46.702 avg_ms=0.2335"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 46.979,
+                "avg_ms": 0.2349,
+                "raw_line": "query_limit: sample=2/3 rounds=200 total_ms=46.979 avg_ms=0.2349"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 46.792,
+                "avg_ms": 0.234,
+                "raw_line": "query_limit: sample=3/3 rounds=200 total_ms=46.792 avg_ms=0.2340"
+              }
+            ],
+            "reported_mean_ms": 0.2341,
+            "reported_stdev_ms": 0.0006,
+            "recomputed_mean_from_printed_averages_ms": 0.23413333333333333,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0005792715732327521,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0007094598884597504
+          }
+        }
+      }
+    },
+    "old2": {
+      "path": "C:\\Users\\Lenovo\\Desktop\\2026_OceanBase数据库大赛解题\\12_seekdb_全文索引调优\\validation-20261030\\round6-fresh-old2-benchmark.txt",
+      "sha256": "8778aac43f6ac30a84d1c4528f49fb6e13aee56c9cd90087b62ce7ceef1f890c",
+      "metadata": {
+        "timestamp": "2026-10-30 16:40:04",
+        "label": "round6-fresh-old2",
+        "git_head": "e6bfff547"
+      },
+      "metrics": {
+        "rows": 20000.0,
+        "batch": 500.0,
+        "rounds": 3000.0,
+        "query_rounds": 200.0,
+        "samples": 3.0,
+        "warmup": 30.0,
+        "skip_load": 0.0,
+        "query_cn_hits": 8001.0,
+        "query_beng_hits": 11000.0,
+        "query_mixed_hits": 7332.0,
+        "query_limit_hits": 20.0,
+        "build_ik_all_sec": 5.975,
+        "build_ik_content_sec": 4.137,
+        "build_beng_en_sec": 2.336,
+        "tokenize_ik_avg_ms": 0.1912,
+        "tokenize_beng_avg_ms": 0.1108,
+        "query_cn_avg_ms": 0.5205,
+        "query_beng_avg_ms": 0.6988,
+        "query_mixed_avg_ms": 0.5606,
+        "query_limit_avg_ms": 0.2307,
+        "git_dirty": 1.0,
+        "select1_avg_ms": 0.0921,
+        "select1_stdev_ms": 0.0006,
+        "raw_load_sec": 0.263,
+        "raw_load_rows_per_sec": 76045.6,
+        "build_total_sec": 12.464,
+        "tokenize_ik_median_ms": 0.1413,
+        "tokenize_ik_stdev_ms": 0.073,
+        "tokenize_beng_median_ms": 0.111,
+        "tokenize_beng_stdev_ms": 0.0002,
+        "query_cn_stdev_ms": 0.0052,
+        "query_beng_stdev_ms": 0.0107,
+        "query_mixed_stdev_ms": 0.0142,
+        "query_limit_stdev_ms": 0.0039
+      },
+      "raw_log": {
+        "available": true,
+        "path": "C:\\Users\\Lenovo\\Desktop\\2026_OceanBase数据库大赛解题\\12_seekdb_全文索引调优\\validation-20261030\\round6-fresh-old2-benchmark.log",
+        "sha256": "e3557bef24b9ab0c1100318cdb72601e21c00e70c7766dd677ec0a7752082de1",
+        "note": "Benchmark stdev uses divisor N (population); printed sample averages are rounded to 4 decimals.",
+        "metrics": {
+          "select1": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 279.065,
+                "avg_ms": 0.093,
+                "raw_line": "select1: sample=1/3 rounds=3000 total_ms=279.065 avg_ms=0.0930"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 275.217,
+                "avg_ms": 0.0917,
+                "raw_line": "select1: sample=2/3 rounds=3000 total_ms=275.217 avg_ms=0.0917"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 275.021,
+                "avg_ms": 0.0917,
+                "raw_line": "select1: sample=3/3 rounds=3000 total_ms=275.021 avg_ms=0.0917"
+              }
+            ],
+            "reported_mean_ms": 0.0921,
+            "reported_stdev_ms": 0.0006,
+            "recomputed_mean_from_printed_averages_ms": 0.09213333333333333,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0006128258770283392,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.000750555349946511
+          },
+          "tokenize_ik": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 423.948,
+                "avg_ms": 0.1413,
+                "raw_line": "tokenize_ik: sample=1/3 rounds=3000 total_ms=423.948 avg_ms=0.1413"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 413.618,
+                "avg_ms": 0.1379,
+                "raw_line": "tokenize_ik: sample=2/3 rounds=3000 total_ms=413.618 avg_ms=0.1379"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 883.145,
+                "avg_ms": 0.2944,
+                "raw_line": "tokenize_ik: sample=3/3 rounds=3000 total_ms=883.145 avg_ms=0.2944"
+              }
+            ],
+            "reported_mean_ms": 0.1912,
+            "reported_stdev_ms": 0.073,
+            "recomputed_mean_from_printed_averages_ms": 0.1912,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.07298661977833105,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.08938998825371888
+          },
+          "tokenize_beng": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 332.953,
+                "avg_ms": 0.111,
+                "raw_line": "tokenize_beng: sample=1/3 rounds=3000 total_ms=332.953 avg_ms=0.1110"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 331.535,
+                "avg_ms": 0.1105,
+                "raw_line": "tokenize_beng: sample=2/3 rounds=3000 total_ms=331.535 avg_ms=0.1105"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 3000,
+                "total_ms": 333.001,
+                "avg_ms": 0.111,
+                "raw_line": "tokenize_beng: sample=3/3 rounds=3000 total_ms=333.001 avg_ms=0.1110"
+              }
+            ],
+            "reported_mean_ms": 0.1108,
+            "reported_stdev_ms": 0.0002,
+            "recomputed_mean_from_printed_averages_ms": 0.11083333333333334,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.00023570226039551606,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0002886751345948131
+          },
+          "query_cn": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 103.988,
+                "avg_ms": 0.5199,
+                "raw_line": "query_cn: sample=1/3 rounds=200 total_ms=103.988 avg_ms=0.5199"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 105.427,
+                "avg_ms": 0.5271,
+                "raw_line": "query_cn: sample=2/3 rounds=200 total_ms=105.427 avg_ms=0.5271"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 102.88,
+                "avg_ms": 0.5144,
+                "raw_line": "query_cn: sample=3/3 rounds=200 total_ms=102.880 avg_ms=0.5144"
+              }
+            ],
+            "reported_mean_ms": 0.5205,
+            "reported_stdev_ms": 0.0052,
+            "recomputed_mean_from_printed_averages_ms": 0.5204666666666666,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.005200213670823767,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.006368935023481837
+          },
+          "query_beng": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 137.165,
+                "avg_ms": 0.6858,
+                "raw_line": "query_beng: sample=1/3 rounds=200 total_ms=137.165 avg_ms=0.6858"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 139.719,
+                "avg_ms": 0.6986,
+                "raw_line": "query_beng: sample=2/3 rounds=200 total_ms=139.719 avg_ms=0.6986"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 142.408,
+                "avg_ms": 0.712,
+                "raw_line": "query_beng: sample=3/3 rounds=200 total_ms=142.408 avg_ms=0.7120"
+              }
+            ],
+            "reported_mean_ms": 0.6988,
+            "reported_stdev_ms": 0.0107,
+            "recomputed_mean_from_printed_averages_ms": 0.6988,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.01069704008904644,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.013101144988129854
+          },
+          "query_mixed": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 109.556,
+                "avg_ms": 0.5478,
+                "raw_line": "query_mixed: sample=1/3 rounds=200 total_ms=109.556 avg_ms=0.5478"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 110.722,
+                "avg_ms": 0.5536,
+                "raw_line": "query_mixed: sample=2/3 rounds=200 total_ms=110.722 avg_ms=0.5536"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 116.106,
+                "avg_ms": 0.5805,
+                "raw_line": "query_mixed: sample=3/3 rounds=200 total_ms=116.106 avg_ms=0.5805"
+              }
+            ],
+            "reported_mean_ms": 0.5606,
+            "reported_stdev_ms": 0.0142,
+            "recomputed_mean_from_printed_averages_ms": 0.5606333333333333,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.014246013087488359,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.017447731466678825
+          },
+          "query_limit": {
+            "samples": [
+              {
+                "index": 1,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 45.09,
+                "avg_ms": 0.2255,
+                "raw_line": "query_limit: sample=1/3 rounds=200 total_ms=45.090 avg_ms=0.2255"
+              },
+              {
+                "index": 2,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 46.367,
+                "avg_ms": 0.2318,
+                "raw_line": "query_limit: sample=2/3 rounds=200 total_ms=46.367 avg_ms=0.2318"
+              },
+              {
+                "index": 3,
+                "count": 3,
+                "rounds": 200,
+                "total_ms": 46.955,
+                "avg_ms": 0.2348,
+                "raw_line": "query_limit: sample=3/3 rounds=200 total_ms=46.955 avg_ms=0.2348"
+              }
+            ],
+            "reported_mean_ms": 0.2307,
+            "reported_stdev_ms": 0.0039,
+            "recomputed_mean_from_printed_averages_ms": 0.23070000000000002,
+            "recomputed_population_stdev_from_printed_averages_ms": 0.0038755644750152213,
+            "recomputed_sample_stdev_from_printed_averages_ms": 0.0047465777145223285
+          }
+        }
+      }
+    }
+  }
+}

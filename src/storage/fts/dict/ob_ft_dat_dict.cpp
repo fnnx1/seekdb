@@ -31,6 +31,36 @@ namespace oceanbase
 {
 namespace storage
 {
+namespace
+{
+// Character maps are built and consumed inside one process. The same hash is
+// used for insertion, lookup and compaction; dictionary codes stay unchanged.
+// Pack common UTF-8/UTF-16 characters without overreading unaligned input.
+OB_INLINE uint64_t hash_dictionary_character(const ObString &key)
+{
+  uint32_t packed = 0;
+  uint16_t first = 0;
+  switch (key.length()) {
+  case 1: packed = static_cast<unsigned char>(key.ptr()[0]); break;
+  case 2: MEMCPY(&first, key.ptr(), 2); packed = first; break;
+  case 3:
+    MEMCPY(&first, key.ptr(), 2);
+    packed = first | (static_cast<uint32_t>(static_cast<unsigned char>(key.ptr()[2])) << 16);
+    break;
+  case 4: MEMCPY(&packed, key.ptr(), 4); break;
+  default: return key.hash();
+  }
+  // Mix length along with bytes; equality still checks the complete original key.
+  uint32_t hash = packed ^ (static_cast<uint32_t>(key.length()) * 0x9e3779b9U);
+  hash ^= hash >> 16;
+  hash *= 0x85ebca6bU;
+  hash ^= hash >> 13;
+  hash *= 0xc2b2ae35U;
+  hash ^= hash >> 16;
+  return hash;
+}
+} // namespace
+
 template <typename DATA_TYPE>
 int ObFTDATBuilder<DATA_TYPE>::init(ObFTTrie<DATA_TYPE> &trie)
 {
@@ -183,6 +213,7 @@ int ObFTDATBuilder<DATA_TYPE>::build_from_trie(ObFTTrie<DATA_TYPE> &trie)
       // already logged
     } else if (OB_FAIL(trie.get_start_word(dat_->start_word_))) {
     } else if (OB_FAIL(trie.get_end_word(dat_->end_word_))) {
+    } else if (OB_FAIL(compact_code_map())) {
     }
     LOG_INFO("build dat finished", K(dat_->start_word_.get_word()), K(dat_->end_word_.get_word()));
 
@@ -190,6 +221,50 @@ int ObFTDATBuilder<DATA_TYPE>::build_from_trie(ObFTTrie<DATA_TYPE> &trie)
     alloc.reset();
   }
 
+  return ret;
+}
+
+template <typename DATA_TYPE>
+int ObFTDATBuilder<DATA_TYPE>::compact_code_map()
+{
+  int ret = OB_SUCCESS;
+  // The construction map is sized by trie nodes, but contains only distinct
+  // characters. Repeated prefixes can make the original map much larger than
+  // its working set. Keep at most a half-full, power-of-two map for readers.
+  size_t capacity = 128;
+  const size_t char_count = map_->size();
+  while (capacity / 2 < char_count && capacity < map_->capacity()) {
+    capacity *= 2;
+  }
+  const size_t old_map_size = dat_->base_offset_;
+  const size_t new_map_size = sizeof(ObArrayHashMap::Header)
+                              + capacity * sizeof(ObArrayHashMap::Entry);
+  if (new_map_size < old_map_size) {
+    ObArenaAllocator scratch_alloc(lib::ObMemAttr("FTCharMap"));
+    ObArrayHashMap *compact_map = static_cast<ObArrayHashMap *>(scratch_alloc.alloc(new_map_size));
+    if (OB_ISNULL(compact_map)) {
+      // Compaction is optional. The existing dictionary is already complete.
+      LOG_WARN("cannot allocate compact character map; retain construction map");
+    } else if (OB_FAIL(map_->rehash_into(*compact_map, capacity))) {
+      LOG_WARN("failed to compact dictionary character map", K(ret));
+    } else {
+      const size_t saved_bytes = old_map_size - new_map_size;
+      const size_t tail_size = dat_->mem_block_size_ - sizeof(ObFTDAT) - old_map_size;
+      // No reader sees this builder-owned buffer yet. All character codes and
+      // base/check entries remain unchanged; only their byte offsets move.
+      MEMMOVE(dat_->buff + new_map_size, dat_->buff + old_map_size, tail_size);
+      MEMCPY(dat_->buff, compact_map, new_map_size);
+      dat_->base_offset_ = new_map_size;
+      dat_->check_offset_ -= saved_bytes;
+      if (dat_->data_index_offset_ != 0) {
+        dat_->data_index_offset_ -= saved_bytes;
+      }
+      if (dat_->data_offset_ != 0) {
+        dat_->data_offset_ -= saved_bytes;
+      }
+      dat_->mem_block_size_ -= saved_bytes;
+    }
+  }
   return ret;
 }
 
@@ -258,9 +333,7 @@ int ObFTDATReader<DATA_TYPE>::match_with_hit(const ObString &ft_char,
   int32_t *base = reinterpret_cast<int32_t *>(dat_->buff + dat_->base_offset_);
   int32_t *check = reinterpret_cast<int32_t *>(dat_->buff + dat_->check_offset_);
 
-  ObFTSingleWord word;
-  word.set_word(ft_char.ptr(), ft_char.length());
-  if (OB_FAIL(dat_->get_map()->find(word, code)) && OB_ENTRY_NOT_EXIST != ret) {
+  if (OB_FAIL(dat_->get_map()->find(ft_char, code)) && OB_ENTRY_NOT_EXIST != ret) {
   } else if (OB_ENTRY_NOT_EXIST == ret) {
     ret = OB_SUCCESS;
     hit.set_unmatch();
@@ -301,16 +374,33 @@ ObArrayHashMap *ObFTDAT::get_map() { return reinterpret_cast<ObArrayHashMap *>(b
 
 int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
 {
+  return find(word.get_word(), code);
+}
+
+int ObArrayHashMap::find(const ObString &word, ObFTWordCode &code) const
+{
   int ret = OB_ENTRY_NOT_EXIST;
-  uint64_t hash = word.get_word().hash();
-  uint64_t index = hash % header_.capacity_;
-  while (header_.data[index].used) {
-    if (header_.data[index].word == word) {
+  const uint64_t hash = hash_dictionary_character(word);
+  const uint64_t capacity = header_.capacity_;
+  if (OB_UNLIKELY(capacity == 0)) {
+    return OB_NOT_INIT;
+  }
+  const bool power_of_two = (capacity & (capacity - 1)) == 0;
+  uint64_t index = power_of_two ? hash & (capacity - 1) : hash % capacity;
+  for (uint64_t probes = 0; probes < capacity && header_.data[index].used; ++probes) {
+    const ObFTSingleWord &stored = header_.data[index].word;
+    if (stored.word_len == word.length()
+        && (word.length() == 0 || MEMCMP(stored.word, word.ptr(), word.length()) == 0)) {
       code = header_.data[index].code;
       ret = OB_SUCCESS;
       break;
     } else {
-      index = (index + 3) % header_.capacity_;
+      if (power_of_two) {
+        index = (index + 3) & (capacity - 1);
+      } else {
+        index += 3;
+        if (index >= capacity) index -= capacity;
+      }
     }
   }
   return ret;
@@ -318,17 +408,51 @@ int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
 
 int ObArrayHashMap::insert(const ObString &key, ObFTWordCode code)
 {
-  int ret = OB_SUCCESS;
-  uint64_t hash = key.hash();
-  uint64_t index = hash % header_.capacity_;
-  while (header_.data[index].used) {
-    index = (index + 3) % header_.capacity_;
+  int ret = OB_SIZE_OVERFLOW;
+  const uint64_t hash = hash_dictionary_character(key);
+  const uint64_t capacity = header_.capacity_;
+  if (OB_UNLIKELY(capacity == 0)) {
+    return OB_NOT_INIT;
   }
+  const bool power_of_two = (capacity & (capacity - 1)) == 0;
+  uint64_t index = power_of_two ? hash & (capacity - 1) : hash % capacity;
+  for (uint64_t probes = 0; probes < capacity; ++probes) {
+    if (!header_.data[index].used) {
+      if (OB_FAIL(header_.data[index].word.set_word(key.ptr(), key.length()))) {
+      } else {
+        header_.data[index].code = code;
+        header_.data[index].used = true;
+        header_.count_++;
+      }
+      break;
+    }
+    if (power_of_two) {
+      index = (index + 3) & (capacity - 1);
+    } else {
+      index += 3;
+      if (index >= capacity) index -= capacity;
+    }
+  }
+  return ret;
+}
 
-  header_.data[index].code = code;
-  header_.data[index].word.set_word(key.ptr(), key.length());
-  header_.data[index].used = true;
-  header_.count_++;
+int ObArrayHashMap::rehash_into(ObArrayHashMap &target, size_t capacity) const
+{
+  int ret = OB_SUCCESS;
+  const size_t buffer_size = sizeof(Header) + capacity * sizeof(Entry);
+  if (OB_UNLIKELY(&target == this || capacity <= header_.count_
+                  || capacity > UINT32_MAX || buffer_size > UINT32_MAX)) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    MEMSET(&target, 0, buffer_size);
+    target.header_.buffer_size_ = buffer_size;
+    target.header_.capacity_ = capacity;
+    for (size_t i = 0; OB_SUCC(ret) && i < header_.capacity_; ++i) {
+      if (header_.data[i].used
+          && OB_FAIL(target.insert(header_.data[i].word.get_word(), header_.data[i].code))) {
+      }
+    }
+  }
   return ret;
 }
 

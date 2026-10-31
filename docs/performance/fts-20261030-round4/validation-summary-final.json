@@ -1,0 +1,42 @@
+{
+  "build": "PASS",
+  "binary_sha256": "6de4423ca976c1a733b8cd550f881840b4abd4928c553dc6d03cdc62a4c74918",
+  "differential_sql_statements": 237,
+  "native_mysqltest_count": 11,
+  "native_mysqltest_cases": [
+    "retrieval_binary_ids",
+    "predicate_only_match",
+    "document_local_tokens",
+    "retrieval_sort_keys",
+    "sort_ascii_collation",
+    "cardinality_only_match",
+    "presence_batch_union",
+    "encoded_sort_collation",
+    "tokenize_parameter_lifetime",
+    "tokenize_streaming_states",
+    "encoded_fulltext_build"
+  ],
+  "exact_score_rows": 27665,
+  "bmw_cases": 88,
+  "bmw_successful_rows": 155947,
+  "bmw_unchanged_unsupported_cases": 4,
+  "concurrent_tokenize": {
+    "sessions": 8,
+    "checked": 3120,
+    "status": "PASS",
+    "per_session": [
+      390,
+      390,
+      390,
+      390,
+      390,
+      390,
+      390,
+      390
+    ]
+  },
+  "deterministic_tokenize_cases": 720,
+  "tokenize_corpus_sha256": "057e03446cb66648a487aedf392c51a1475369b3596bb884ec142a4ef923238f",
+  "status": "PASS",
+  "note": "Exact-score oracle uses the same rebuilt corpus in baseline-exact-paired.json. No tolerance or expected-data edits."
+}

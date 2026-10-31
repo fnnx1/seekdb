@@ -1,0 +1,60 @@
+{
+  "source_manifest_files_verified": 8,
+  "services": {
+    "seekdb-fts-validate": "inactive",
+    "seekdb-fts-build": "inactive",
+    "seekdb-fts-debug": "inactive",
+    "seekdb-fts-cold": "inactive"
+  },
+  "removed": [
+    {
+      "path": "/home/fbd2451702/fts-round7-c1-fresh/new1",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c1-fresh/new2",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c1-fresh/old1",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c1-fresh/old2",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c2-fresh/new1",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c2-fresh/new2",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c2-fresh/old1",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c2-fresh/old2",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c2-confirm/new1",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c2-confirm/new2",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c2-confirm/old1",
+      "disk_usage_before": "2.2G"
+    },
+    {
+      "path": "/home/fbd2451702/fts-round7-c2-confirm/old2",
+      "disk_usage_before": "2.2G"
+    }
+  ],
+  "time": "2026-10-30T10:45:35.223736+00:00"
+}

@@ -1,0 +1,53 @@
+# FTS bulk construction must preserve per-document ownership across batches,
+# empty documents, out-row LOBs, multiple columns and subsequent DML.
+SET NAMES utf8mb4;
+SET @saved_group_concat_max_len = @@session.group_concat_max_len;
+SET SESSION group_concat_max_len = 1000000;
+--disable_warnings
+DROP TABLE IF EXISTS fts_batch_build_docs;
+DROP TABLE IF EXISTS fts_batch_build_heap;
+DROP TABLE IF EXISTS fts_batch_build_empty;
+DROP TABLE IF EXISTS fts_batch_build_parts;
+DROP TABLE IF EXISTS fts_batch_build_digits;
+--enable_warnings
+CREATE TABLE fts_batch_build_digits(n INT PRIMARY KEY);
+INSERT INTO fts_batch_build_digits VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+SELECT GROUP_CONCAT(CONCAT('lex',CHAR(97+a.n),CHAR(97+b.n),CHAR(97+c.n)) ORDER BY a.n,b.n,c.n SEPARATOR ' ') INTO @many_words FROM fts_batch_build_digits a CROSS JOIN fts_batch_build_digits b CROSS JOIN fts_batch_build_digits c;
+CREATE TABLE fts_batch_build_docs(id INT PRIMARY KEY, title VARCHAR(80) COLLATE utf8mb4_general_ci, content LONGTEXT COLLATE utf8mb4_general_ci);
+INSERT INTO fts_batch_build_docs VALUES(1,NULL,NULL),(2,'',''),(3,'the and','a the and'),(4,'alpha beta',REPEAT('alpha alpha beta ',40)),(5,'数据库全文检索','数据库 数据库 OceanBase 全文检索'),(6,NULL,@many_words),(7,'alpha 数据库',CONCAT(@many_words,' alpha beta ',@many_words)),(8,'résumé RESUME',CONCAT(REPEAT(@many_words,4),' alpha gamma'));
+ALTER TABLE fts_batch_build_docs ADD FULLTEXT INDEX ft_beng(content) WITH PARSER beng;
+ALTER TABLE fts_batch_build_docs ADD FULLTEXT INDEX ft_ik(title,content) WITH PARSER ik;
+SELECT COUNT(*) FROM fts_batch_build_docs WHERE MATCH(content) AGAINST('lexaaa lexjjj');
+SELECT id,ROUND(MATCH(content) AGAINST('lexaaa lexjjj alpha beta'),10) AS score FROM fts_batch_build_docs WHERE MATCH(content) AGAINST('lexaaa lexjjj alpha beta') ORDER BY id;
+SELECT id,ROUND(MATCH(title,content) AGAINST('数据库 alpha'),10) AS score FROM fts_batch_build_docs WHERE MATCH(title,content) AGAINST('数据库 alpha') ORDER BY id;
+SELECT id FROM fts_batch_build_docs WHERE MATCH(content) AGAINST('lexaaa lexjjj') ORDER BY id LIMIT 2 OFFSET 1;
+UPDATE fts_batch_build_docs SET content='omega alpha' WHERE id=6;
+UPDATE fts_batch_build_docs SET title=NULL,content=NULL WHERE id=7;
+DELETE FROM fts_batch_build_docs WHERE id=4;
+INSERT INTO fts_batch_build_docs VALUES(9,'数据库',CONCAT(@many_words,' beta beta gamma'));
+SELECT id,ROUND(MATCH(content) AGAINST('lexaaa lexjjj alpha beta'),10) AS score FROM fts_batch_build_docs WHERE MATCH(content) AGAINST('lexaaa lexjjj alpha beta') ORDER BY id;
+SELECT id,ROUND(MATCH(title,content) AGAINST('数据库 alpha'),10) AS score FROM fts_batch_build_docs WHERE MATCH(title,content) AGAINST('数据库 alpha') ORDER BY id;
+ALTER TABLE fts_batch_build_docs DROP INDEX ft_beng;
+ALTER TABLE fts_batch_build_docs ADD FULLTEXT INDEX ft_beng(content) WITH PARSER beng;
+SELECT id,ROUND(MATCH(content) AGAINST('lexaaa lexjjj alpha beta'),10) AS score FROM fts_batch_build_docs WHERE MATCH(content) AGAINST('lexaaa lexjjj alpha beta') ORDER BY id;
+CREATE TABLE fts_batch_build_heap(content LONGTEXT COLLATE utf8mb4_bin);
+INSERT INTO fts_batch_build_heap VALUES(NULL),(''),(@many_words),(@many_words),('alpha alpha beta');
+ALTER TABLE fts_batch_build_heap ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+SELECT COUNT(*) FROM fts_batch_build_heap WHERE MATCH(content) AGAINST('lexaaa lexjjj');
+DELETE FROM fts_batch_build_heap WHERE content='alpha alpha beta';
+SELECT COUNT(*) FROM fts_batch_build_heap WHERE MATCH(content) AGAINST('alpha');
+CREATE TABLE fts_batch_build_empty(id INT PRIMARY KEY, content TEXT);
+ALTER TABLE fts_batch_build_empty ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+SELECT COUNT(*) FROM fts_batch_build_empty WHERE MATCH(content) AGAINST('alpha');
+INSERT INTO fts_batch_build_empty VALUES(1,'alpha'),(2,NULL),(3,'');
+SELECT id FROM fts_batch_build_empty WHERE MATCH(content) AGAINST('alpha') ORDER BY id;
+CREATE TABLE fts_batch_build_parts(id INT PRIMARY KEY, content LONGTEXT) PARTITION BY HASH(id) PARTITIONS 2;
+INSERT INTO fts_batch_build_parts VALUES(1,@many_words),(2,'alpha alpha'),(3,NULL),(4,CONCAT(@many_words,' alpha'));
+ALTER TABLE fts_batch_build_parts ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+SELECT id,ROUND(MATCH(content) AGAINST('lexaaa alpha'),10) AS score FROM fts_batch_build_parts WHERE MATCH(content) AGAINST('lexaaa alpha') ORDER BY id;
+DROP TABLE fts_batch_build_docs;
+DROP TABLE fts_batch_build_heap;
+DROP TABLE fts_batch_build_empty;
+DROP TABLE fts_batch_build_parts;
+DROP TABLE fts_batch_build_digits;
+SET SESSION group_concat_max_len = @saved_group_concat_max_len;

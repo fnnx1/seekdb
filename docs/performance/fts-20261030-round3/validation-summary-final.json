@@ -1,0 +1,21 @@
+{
+  "baseline_commit": "635af5e17e1c66d9b20f3b59d3a695913c13a14e",
+  "candidate_binary_sha256": "21c0ad220e3c054a4ab3438549b39b19a64c3fa4137e1b4409dd0e322795ae03",
+  "build_exit": 0,
+  "sql_differential_statements": 165,
+  "full_corpus_score_rows": 27665,
+  "bmw_cases": 88,
+  "bmw_success_rows": 155947,
+  "bmw_preexisting_errors": 4,
+  "native_mysqltests_passed": 7,
+  "concurrent_tokenize_calls": 3120,
+  "exact_results": "PASS final candidate3",
+  "count_limit_plan": "calc_relevance=false; is_index_back=false; dummy projection; limit 20",
+  "direct_limit_and_count_column": "ranking retained",
+  "notes": [
+    "Initial corpus score values changed after a restart for BOTH original and candidate binaries; exact comparison uses the restarted original, without rounding/tolerance.",
+    "ASCII result file had CRLF only; normalized to LF after verifying all bytes matched actual output modulo line endings."
+  ],
+  "multi_projection_regression": "PASS final candidate3, 39 SQL statements and native mysqltest",
+  "reverted_changes": "TOKENIZE arena reuse and IK dictionary hash changes removed before candidate3"
+}

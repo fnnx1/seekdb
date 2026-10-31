@@ -1,0 +1,43 @@
+set names utf8mb4;
+select tokenize('a about an are as at be by com de en for from how i in is it la of on or that the this to was what when where who will with und www', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]');
+tokenize('a about an are as at be by com de en for from how i in is it la of on or that the this to was what when where who will with und www', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]')
+{"tokens": [], "doc_len": 0}
+select tokenize('A ABOUT AN ARE AS AT BE BY COM DE EN FOR FROM HOW I IN IS IT LA OF ON OR THAT THE THIS TO WAS WHAT WHEN WHERE WHO WILL WITH UND WWW', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]');
+tokenize('A ABOUT AN ARE AS AT BE BY COM DE EN FOR FROM HOW I IN IS IT LA OF ON OR THAT THE THIS TO WAS WHAT WHEN WHERE WHO WILL WITH UND WWW', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]')
+{"tokens": [], "doc_len": 0}
+select tokenize('aa abo abouta aand areaa asset athlete been byte company deed ending forte froma however ii ina island item lace offline ongoing order thatch theme thisa together wasp whatnot whenever whereby whose willow without under wwwa abcdefghijkl abcdefghijklm', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]');
+tokenize('aa abo abouta aand areaa asset athlete been byte company deed ending forte froma however ii ina island item lace offline ongoing order thatch theme thisa together wasp whatnot whenever whereby whose willow without under wwwa abcdefghijkl abcdefg
+{"tokens": [{"company": 1}, {"deed": 1}, {"abcdefghijkl": 1}, {"abouta": 1}, {"ending": 1}, {"thisa": 1}, {"willow": 1}, {"wwwa": 1}, {"asset": 1}, {"ongoing": 1}, {"however": 1}, {"aa": 1}, {"whose": 1}, {"under": 1}, {"lace": 1}, {"froma": 1}, {"together": 1}, {"forte": 1}, {"abcdefghijklm": 1}, {"abo": 1}, {"theme": 1}, {"thatch": 1}, {"offline": 1}, {"whatnot": 1}, {"ii": 1}, {"wasp": 1}, {"areaa": 1}, {"athlete": 1}, {"island": 1}, {"without": 1}, {"order": 1}, {"whereby": 1}, {"whenever": 1}, {"ina": 1}, {"byte": 1}, {"aand": 1}, {"been": 1}, {"item": 1}], "doc_len": 38}
+select tokenize('THE thé thè thê thë A à Á å Ä is IS ís İS ıS résumé RESUME cafe CAFÉ Straße STRASSE αβγ русский 日本語', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]');
+tokenize('THE thé thè thê thë A à Á å Ä is IS ís İS ıS résumé RESUME cafe CAFÉ Straße STRASSE αβγ русский 日本語', 'beng', '[{"additional_args":[{"min_token_size":1},{"max_token_size":84}]},{"output":"all"}]')
+{"tokens": [{"strasse": 1}, {"русский": 1}, {"日本語": 1}, {"résumé": 2}, {"αβγ": 1}, {"cafe": 2}, {"straße": 1}], "doc_len": 9}
+select tokenize(convert('THE ABOUT Alpha beta' using binary), 'beng', '[{"output":"all"}]');
+tokenize(convert('THE ABOUT Alpha beta' using binary), 'beng', '[{"output":"all"}]')
+{"tokens": [{"beta": 1}, {"Alpha": 1}], "doc_len": 2}
+select tokenize('中华人民共和国全国人民代表大会常务委员会中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+tokenize('中华人民共和国全国人民代表大会常务委员会中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]')
+{"tokens": [{"全国人民代表大会": 1}, {"人民大会堂": 1}, {"常务委员会": 1}, {"中华人民共和国": 2}], "doc_len": 5}
+select tokenize('中华人民共和国全国人民代表大会常务委员会中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+tokenize('中华人民共和国全国人民代表大会常务委员会中华人民共和国人民大会堂', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]')
+{"tokens": [{"常务委员": 1}, {"全国人民代表大会": 1}, {"大会": 2}, {"人民大会堂": 1}, {"全国": 1}, {"人民代表大会": 1}, {"大会堂": 1}, {"共和国": 2}, {"人民代表": 1}, {"人民大会": 1}, {"会中": 1}, {"代表大会": 1}, {"人民共和国": 2}, {"中华人民": 2}, {"共和": 2}, {"大会常务": 1}, {"常务委员会": 1}, {"国": 1}, {"全国人民": 1}, {"委员会": 1}, {"常务": 1}, {"全国人": 1}, {"会堂": 1}, {"中华": 2}, {"委员": 1}, {"中华人民共和国": 2}, {"代表": 1}, {"国人": 2}, {"华人": 2}, {"人民": 4}], "doc_len": 42}
+select tokenize('一一对应。不中不西，中华人民共和国；国际化。天文学，学习；工厂。我的文章，数据库。日本；未来。测试，码头；索引。网络，词语；语言。键盘，集合；阿拉伯。韧性，馨香；龟甲。', 'ik', '[{"output":"all"}]');
+tokenize('一一对应。不中不西，中华人民共和国；国际化。天文学，学习；工厂。我的文章，数据库。日本；未来。测试，码头；索引。网络，词语；语言。键盘，集合；阿拉伯。韧性，馨香；�
+{"tokens": [{"韧性": 1}, {"工厂": 1}, {"测试": 1}, {"文章": 1}, {"的": 1}, {"学习": 1}, {"语言": 1}, {"键盘": 1}, {"未来": 1}, {"词语": 1}, {"集合": 1}, {"索引": 1}, {"不中不西": 1}, {"中华人民共和国": 1}, {"日本": 1}, {"龟甲": 1}, {"网络": 1}, {"数据库": 1}, {"天文学": 1}, {"我": 1}, {"码头": 1}, {"阿拉伯": 1}, {"馨香": 1}, {"国际化": 1}, {"一一对应": 1}], "doc_len": 25}
+select tokenize('a中华人民共和国b one数据库two 3.14公斤 １２３平方公里 ＡＢＣ半角ｶﾀｶﾅ カタカナ 한국어 😀 𠮷', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]');
+tokenize('a中华人民共和国b one数据库two 3.14公斤 １２３平方公里 ＡＢＣ半角ｶﾀｶﾅ カタカナ 한국어 😀 𠮷', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]')
+{"tokens": [{"b": 1}, {"one": 1}, {"a": 1}, {"3.14公斤": 1}, {"ｶ": 2}, {"ﾀ": 1}, {"어": 1}, {"中华人民共和国": 1}, {"半角": 1}, {"数据库": 1}, {"カ": 2}, {"ﾅ": 1}, {"ａｂｃ": 1}, {"국": 1}, {"two": 1}, {"１２３平方公里": 1}, {"ナ": 1}, {"タ": 1}, {"한": 1}], "doc_len": 21}
+select tokenize('a中华人民共和国b one数据库two 3.14公斤 １２３平方公里 ＡＢＣ半角ｶﾀｶﾅ カタカナ 한국어 😀 𠮷', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]');
+tokenize('a中华人民共和国b one数据库two 3.14公斤 １２３平方公里 ＡＢＣ半角ｶﾀｶﾅ カタカナ 한국어 😀 𠮷', 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]')
+{"tokens": [{"b": 1}, {"one": 1}, {"a": 1}, {"共和": 1}, {"中华人民": 1}, {"方公里": 1}, {"数据": 1}, {"ｶ": 2}, {"人民": 1}, {"人民共和国": 1}, {"华人": 1}, {"公里": 1}, {"库": 1}, {"里": 1}, {"ﾀ": 1}, {"3.14": 1}, {"共和国": 1}, {"公斤": 1}, {"어": 1}, {"中华人民共和国": 1}, {"半角": 1}, {"方": 1}, {"平方公里": 1}, {"数据库": 1}, {"１２３": 1}, {"中华": 1}, {"カ": 2}, {"ﾅ": 1}, {"ａｂｃ": 1}, {"斤": 1}, {"국": 1}, {"two": 1}, {"国": 1}, {"ナ": 1}, {"タ": 1}, {"平方": 1}, {"한": 1}], "doc_len": 39}
+drop table if exists tokenize_streaming_states;
+create table tokenize_streaming_states(id int primary key, content varchar(4096));
+insert into tokenize_streaming_states values(1, repeat('中华人民共和国数据库索引。', 50)),(2, repeat('中国 北京 上海 数据库。', 40));
+select id, tokenize(content, 'ik', '[{"additional_args":[{"ik_mode":"smart"}]},{"output":"all"}]') as tokens from tokenize_streaming_states order by id;
+id	tokens
+1	{"tokens": [{"中华人民共和国": 50}, {"数据库": 50}, {"索引": 50}], "doc_len": 150}
+2	{"tokens": [{"数据库": 40}, {"北京": 40}, {"上海": 40}, {"中国": 40}], "doc_len": 160}
+select id, tokenize(content, 'ik', '[{"additional_args":[{"ik_mode":"max_word"}]},{"output":"all"}]') as tokens from tokenize_streaming_states order by id;
+id	tokens
+1	{"tokens": [{"人民共和国": 50}, {"数据": 50}, {"中华人民": 50}, {"共和": 50}, {"人民": 50}, {"中华": 50}, {"中华人民共和国": 50}, {"数据库": 50}, {"国": 50}, {"库": 50}, {"共和国": 50}, {"华人": 50}, {"索引": 50}], "doc_len": 650}
+2	{"tokens": [{"库": 40}, {"数据库": 40}, {"北京": 40}, {"上海": 40}, {"数据": 40}, {"中国": 40}], "doc_len": 240}
+drop table tokenize_streaming_states;

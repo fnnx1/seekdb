@@ -1,0 +1,31 @@
+# Repeated words, collation-sensitive sort keys and dense top-k retrieval.
+SET NAMES utf8mb4;
+--disable_warnings
+DROP TABLE IF EXISTS fts_sort_keys;
+DROP TABLE IF EXISTS fts_key_digits;
+--enable_warnings
+CREATE TABLE fts_key_digits(n INT PRIMARY KEY);
+INSERT INTO fts_key_digits VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE fts_sort_keys(id INT PRIMARY KEY, v VARCHAR(64) COLLATE utf8mb4_general_ci, b VARBINARY(8), content TEXT, FULLTEXT INDEX ft(content) WITH PARSER beng);
+INSERT INTO fts_sort_keys SELECT a.n*100+b.n*10+c.n,
+CASE c.n WHEN 0 THEN NULL WHEN 1 THEN '' WHEN 2 THEN 'Alpha' WHEN 3 THEN 'alpha ' WHEN 4 THEN 'résumé' WHEN 5 THEN 'RESUME' WHEN 6 THEN '数据库' WHEN 7 THEN '数据' WHEN 8 THEN '😀' ELSE 'ALPHA' END,
+UNHEX(LPAD(HEX(a.n*100+b.n*10+c.n),8,'0')),
+CASE WHEN a.n=9 THEN 'alpha alpha beta gamma' WHEN b.n<5 THEN 'alpha beta' WHEN c.n<5 THEN 'gamma alpha' ELSE 'delta beta gamma' END
+FROM fts_key_digits a CROSS JOIN fts_key_digits b CROSS JOIN fts_key_digits c;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'false') */ id, HEX(v), HEX(b) FROM fts_sort_keys ORDER BY v, b;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'false') */ id, HEX(v) FROM fts_sort_keys ORDER BY v DESC, id DESC;
+SELECT /*+ OPT_PARAM('ENABLE_NEWSORT', 'false') */ id FROM fts_sort_keys ORDER BY b DESC;
+SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta') LIMIT 30;
+SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 20 OFFSET 5;
+SELECT COUNT(*) FROM (SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 20 OFFSET 5) t;
+SELECT MATCH(content) AGAINST('alpha beta gamma') AS score FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta gamma') LIMIT 20 OFFSET 5;
+SELECT COUNT(*) FROM (SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta') LIMIT 500) t;
+SELECT COUNT(*) FROM (SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta') LIMIT 30 OFFSET 990) t;
+SELECT COUNT(*) FROM (SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('absent') LIMIT 20) t;
+SELECT id, MATCH(content) AGAINST('alpha beta gamma') AS score FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha beta gamma') ORDER BY score DESC, id LIMIT 35;
+SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('+alpha -delta' IN BOOLEAN MODE) ORDER BY id LIMIT 25;
+UPDATE fts_sort_keys SET content='gamma gamma alpha' WHERE id BETWEEN 900 AND 949;
+DELETE FROM fts_sort_keys WHERE id>=975;
+SELECT id FROM fts_sort_keys WHERE MATCH(content) AGAINST('alpha gamma') LIMIT 30;
+DROP TABLE fts_sort_keys;
+DROP TABLE fts_key_digits;
