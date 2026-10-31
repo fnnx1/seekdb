@@ -11999,6 +11999,13 @@ static int check_predicate_only_match(const ObDMLStmt &stmt,
   if (stmt.is_select_stmt() && match.get_expr_type() == T_FUN_MATCH_AGAINST
       && match.get_mode_flag() == NATURAL_LANGUAGE_MODE
       && match.get_columns_boosts().empty() && nullptr == match.get_param_text_expr()
+      // A maximum n sorted by the caller observes which rows are the first n.
+      // The presence-only retrieval path does not preserve the scanned order
+      // that the top-n filter pushed into the text scan relies on, so keep the
+      // scoring path whenever the statement has its own ORDER BY. Pure
+      // COUNT(*) views, which are the reason for this path, carry no ORDER BY
+      // and are unaffected.
+      && stmt.get_order_item_size() == 0
       && stmt.get_from_items().count() == 1 && stmt.get_joined_tables().empty()
       && stmt.get_semi_infos().empty() && stmt.get_subquery_exprs().empty()
       // Residual predicates can share the rowkey projection with the IR scan.
