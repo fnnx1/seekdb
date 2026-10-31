@@ -31,16 +31,17 @@ namespace oceanbase
 {
 namespace storage
 {
-int ObIIKProcessor::process(TokenizeContext &ctx,
-                            const char *ch,
-                            const uint8_t char_len,
-                            const ObFTCharUtil::CharType type)
+int ObIIKProcessor::process(TokenizeContext &ctx)
 {
   int ret = OB_SUCCESS;
 
-  // The character and its classification are fetched once per character and shared by all
-  // segmenters instead of being re-read (with bounds checks) by every processor.
-  if (OB_FAIL(do_process(ctx, ch, char_len, type))) {
+  ObFTCharUtil::CharType type;
+  const char *ch = nullptr;
+  uint8_t char_len = 0;
+
+  if (OB_FAIL(ctx.current_char_type(type))) {
+  } else if (OB_FAIL(ctx.current_char(ch, char_len))) {
+  } else if (OB_FAIL(do_process(ctx, ch, char_len, type))) {
   }
   return ret;
 }
@@ -101,21 +102,10 @@ int TokenizeContext::current_char_type(ObFTCharUtil::CharType &type)
 int TokenizeContext::prepare_next_char()
 {
   int ret = OB_SUCCESS;
-  // UTF-8 ASCII has a one-byte code point. Avoid the charset length
-  // dispatcher for each ASCII character in mixed English/Chinese documents.
-  if (ObCharset::charset_type_by_coll(coll_type_) == CHARSET_UTF8MB4
-      && cursor_ < fulltext_len_
-      && static_cast<unsigned char>(fulltext_[cursor_]) < 0x80) {
-    next_char_len_ = 1;
-    if (OB_FAIL(ObFTCharUtil::classify_first_char(coll_type_,
-                                                  fulltext_ + cursor_,
-                                                  next_char_len_,
-                                                  next_char_type_))) {
-    }
-  } else if (OB_FAIL(ObCharset::first_valid_char(coll_type_,
-                                                  fulltext_ + cursor_,
-                                                  fulltext_len_ - cursor_,
-                                                  next_char_len_))) {
+  if (OB_FAIL(ObCharset::first_valid_char(coll_type_,
+                                          fulltext_ + cursor_,
+                                          fulltext_len_ - cursor_,
+                                          next_char_len_))) {
   } else if (OB_FAIL(ObFTCharUtil::classify_first_char(coll_type_,
                                                        fulltext_ + cursor_,
                                                        next_char_len_,
