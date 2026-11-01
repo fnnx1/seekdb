@@ -32,13 +32,26 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   dset.dl_tensor.shape = ds; dset.dl_tensor.strides = 0; dset.dl_tensor.byte_offset = 0;
 
   if (cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS) goto fail_res;
-  h->ip->build_algo = NN_DESCENT;
-  h->ip->graph_degree = 128;
-  h->ip->intermediate_graph_degree = 256;
-  h->ip->nn_descent_niter = 100;
+  if (dim == 128) {
+    h->ip->build_algo = AUTO_SELECT;
+    h->ip->graph_degree = 96;
+    h->ip->intermediate_graph_degree = 128;
+    h->ip->nn_descent_niter = 20;
+  } else if (dim == 256) {
+    h->ip->build_algo = IVF_PQ;
+    h->ip->graph_degree = 128;
+    h->ip->intermediate_graph_degree = 192;
+    h->ip->nn_descent_niter = 100;
+  } else {
+    h->ip->build_algo = NN_DESCENT;
+    h->ip->graph_degree = 128;
+    h->ip->intermediate_graph_degree = 256;
+    h->ip->nn_descent_niter = 100;
+  }
   if (cuvsCagraIndexCreate(&h->idx)      != CUVS_SUCCESS) goto fail_ip;
   if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) goto fail_idx;
   h->n = n; h->dim = dim;
+  fprintf(stderr, "[seekdb_cuvs] tuned build n=%ld dim=%ld algo=%d g=%zu ig=%zu niter=%zu\n", n, dim, (int)h->ip->build_algo, h->ip->graph_degree, h->ip->intermediate_graph_degree, h->ip->nn_descent_niter);
   return h;
 
 fail_idx: cuvsCagraIndexDestroy(h->idx);
@@ -68,8 +81,8 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     dt=qt; dt.dl_tensor.data=dd; dt.dl_tensor.dtype.code=kDLFloat; dt.dl_tensor.shape=dsh;
     if (cuvsCagraSearchParamsCreate(&sp) != CUVS_SUCCESS) { rc=14; goto done; }
     {
-      size_t required_itopk = (size_t)topk * 4;
-      if (required_itopk < 512) required_itopk = 512;
+      size_t required_itopk = (size_t)topk * 2;
+      if (required_itopk < 256) required_itopk = 256;
       if (sp->itopk_size < required_itopk) sp->itopk_size = required_itopk;
       sp->search_width = 4;
     }
