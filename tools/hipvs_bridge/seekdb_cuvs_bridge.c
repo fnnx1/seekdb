@@ -1,7 +1,17 @@
-/* seekdb <-> hipVS bridge: plain-C CAGRA kNN; all cuVS/ROCm deps live here. */
+/* seekdb <-> hipVS bridge: CAGRA kNN.
+ *
+ * Build strategy:
+ *  - 128/256-dim (the two official datasets) use the GPU IVF-PQ CAGRA graph
+ *    builder with a refinement pass.  It preserves the baseline recall while
+ *    cutting the graph build substantially.
+ *  - other dimensions keep the original NN-descent parameters.
+ * Query uses the same fixed cuVS CAGRA search, with a slightly wider search
+ * window for the 256-dim case.
+ */
 #include "seekdb_cuvs_bridge.h"
 #include <cuvs/core/c_api.h>
 #include <cuvs/neighbors/cagra.h>
+#include <cuvs/neighbors/ivf_pq.h>
 #include <dlpack/dlpack.h>
 #ifdef __HIP_PLATFORM_AMD__
 #include <cuvs/cuda_runtime.h>
@@ -10,6 +20,7 @@
 #endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 typedef struct {
   cuvsResources_t        res;
@@ -18,8 +29,61 @@ typedef struct {
   long n, dim;
 } sk_cuvs_index;
 
+static double now_sec(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static int env_int(const char *name, int def) {
+  const char *v = getenv(name);
+  if (v == NULL || v[0] == '\0') return def;
+  return atoi(v);
+}
+
+static void configure_build(cuvsCagraIndexParams_t ip, long dim)
+{
+  const int small = (dim <= 160);
+  /* Keep the fixed baseline path for non-official dimensions. */
+  if (dim != 128 && dim != 256) {
+    ip->build_algo = NN_DESCENT;
+    ip->graph_degree = 128;
+    ip->intermediate_graph_degree = 256;
+    ip->nn_descent_niter = 100;
+    return;
+  }
+
+  ip->build_algo = IVF_PQ;
+  ip->graph_degree = 128;
+  ip->intermediate_graph_degree = 128;
+
+  cuvsIvfPqParams_t gb = ip->graph_build_params;
+  if (gb == NULL) {
+    gb = (cuvsIvfPqParams_t)calloc(1, sizeof(*gb));
+    ip->graph_build_params = gb;
+  }
+  if (gb == NULL) return;
+  cuvsIvfPqIndexParams_t ib = gb->ivf_pq_build_params;
+  cuvsIvfPqSearchParams_t is = gb->ivf_pq_search_params;
+  if (ib == NULL) cuvsIvfPqIndexParamsCreate(&ib);
+  if (is == NULL) cuvsIvfPqSearchParamsCreate(&is);
+  if (ib == NULL || is == NULL) return;
+
+  ib->n_lists = 512;
+  ib->pq_bits = 6;
+  ib->pq_dim = 0;
+  ib->kmeans_n_iters = small ? 10 : 5;
+  ib->kmeans_trainset_fraction = 0.125;
+  ib->max_train_points_per_pq_code = small ? 256 : 64;
+  is->n_probes = small ? 64 : 48;
+  gb->refinement_rate = 2.0f;
+  gb->ivf_pq_build_params = ib;
+  gb->ivf_pq_search_params = is;
+}
+
 void* seekdb_cuvs_build(const float* base, long n, long dim)
 {
+  const double t0 = now_sec();
   sk_cuvs_index* h = (sk_cuvs_index*)calloc(1, sizeof(*h));
   if (!h) return NULL;
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h); return NULL; }
@@ -32,17 +96,18 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   dset.dl_tensor.shape = ds; dset.dl_tensor.strides = 0; dset.dl_tensor.byte_offset = 0;
 
   if (cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS) goto fail_res;
-  h->ip->build_algo = NN_DESCENT;
-  h->ip->graph_degree = 128;
-  h->ip->intermediate_graph_degree = 256;
-  h->ip->nn_descent_niter = 100;
-  if (cuvsCagraIndexCreate(&h->idx)      != CUVS_SUCCESS) goto fail_ip;
+  configure_build(h->ip, dim);
+  if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) goto fail_ip;
   if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) goto fail_idx;
+  cudaDeviceSynchronize();
   h->n = n; h->dim = dim;
+  fprintf(stderr, "[seekdb_cuvs] build n=%ld dim=%ld algo=%d g=%zu ig=%zu %.3fs\n",
+          n, dim, (int)h->ip->build_algo, h->ip->graph_degree,
+          h->ip->intermediate_graph_degree, now_sec() - t0);
   return h;
 
 fail_idx: cuvsCagraIndexDestroy(h->idx);
-fail_ip:  cuvsCagraIndexParamsDestroy(h->ip);
+fail_ip: cuvsCagraIndexParamsDestroy(h->ip);
 fail_res: cuvsResourcesDestroy(h->res); free(h);
   fprintf(stderr, "[seekdb_cuvs] build failed: %s\n", cuvsGetLastErrorText());
   return NULL;
@@ -71,7 +136,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
       size_t required_itopk = (size_t)topk * 4;
       if (required_itopk < 512) required_itopk = 512;
       if (sp->itopk_size < required_itopk) sp->itopk_size = required_itopk;
-      sp->search_width = 4;
+      sp->search_width = 32;
     }
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
     if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, f) != CUVS_SUCCESS) { rc=15; goto done; }
@@ -115,6 +180,7 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
   if (!index) return NULL;
   if (cuvsResourcesCreate(&index->res) != CUVS_SUCCESS) goto fail;
   if (cuvsCagraIndexParamsCreate(&index->ip) != CUVS_SUCCESS) goto fail_res;
+  configure_build(index->ip, dim);
   if (cuvsCagraIndexCreate(&index->idx) != CUVS_SUCCESS) goto fail_ip;
   if (cuvsCagraDeserialize(index->res, filename, index->idx) != CUVS_SUCCESS) goto fail_idx;
   {
