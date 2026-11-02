@@ -23,9 +23,10 @@ mkdir -p "$(dirname "$OUTPUT")"
 "$HIPCC" \
   -shared \
   -fPIC \
-  -O3 \
+  -O2 \
   -std=c++17 \
   -x hip \
+  --offload-arch=gfx1100 \
   -D__HIP_PLATFORM_AMD__ \
   -I"$SCRIPT_DIR" \
   -I"$HIPVS_ROOT/include" \
