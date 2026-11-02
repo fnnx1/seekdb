@@ -616,7 +616,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   h->fp16 = env_int("TILED_FP16_INDEX", 0);
   h->k = (dim == 128) ? env_int("TILED_K", 64) : env_int("TILED_K", 256);
   int B = env_int("TILED_Q_BLOCK", dim == 128 ? 1024 : 768);
-  int T = env_int("TILED_BASE_TILE", dim == 128 ? 8192 : 16384);
+  int T = env_int("TILED_BASE_TILE", dim == 128 ? 8192 : 28672);
   if (B <= 0 || T <= 0 || h->k <= 0 || h->k > 256) { free(h); return NULL; }
   if (h->k > n) {
     long kk = 1;
