@@ -444,7 +444,7 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   float* d_graph_k = NULL;
   uint32_t* d_graph_block = NULL;
   hipblasHandle_t blas = NULL;
-  int use_blas = env_int("TILED_GEMM_BLAS", 0);
+  int use_blas = env_int("TILED_GEMM_BLAS", dim == 256 ? 1 : 0);
   uint32_t* graph = NULL;
   long lcm = (long)B * (long)T / gcd_int(B, T);
   long padded_n = ((n + lcm - 1) / lcm) * lcm;
@@ -615,7 +615,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   mem_sampler_start();
   h->fp16 = env_int("TILED_FP16_INDEX", 0);
   h->k = (dim == 128) ? env_int("TILED_K", 64) : env_int("TILED_K", 256);
-  int B = env_int("TILED_Q_BLOCK", dim == 128 ? 1024 : 256);
+  int B = env_int("TILED_Q_BLOCK", dim == 128 ? 1024 : 768);
   int T = env_int("TILED_BASE_TILE", dim == 128 ? 8192 : 16384);
   if (B <= 0 || T <= 0 || h->k <= 0 || h->k > 256) { free(h); return NULL; }
   if (h->k > n) {
