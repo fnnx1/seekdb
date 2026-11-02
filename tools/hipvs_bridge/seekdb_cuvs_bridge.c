@@ -567,6 +567,32 @@ cleanup:
   return rc;
 }
 
+static int build_small_cagra(sk_bf_index* h, const float* base, long n, long dim)
+{
+  cuvsCagraIndexParams_t ip = NULL;
+  DLManagedTensor base_t = {0};
+  long bs[2] = {n, dim};
+  long gd = n < 64 ? n : 64;
+  if (cuvsCagraIndexParamsCreate(&ip) != CUVS_SUCCESS) { ip = NULL; goto fail; }
+  ip->build_algo = AUTO_SELECT;
+  ip->graph_degree = (size_t)gd;
+  ip->intermediate_graph_degree = (size_t)gd;
+  ip->nn_descent_niter = 20;
+  set_tensor(&base_t, (void*)base, kDLCPU, 32, n, dim, bs);
+  if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) goto fail;
+  if (cuvsCagraBuild(h->res, ip, &base_t, h->idx) != CUVS_SUCCESS) goto fail;
+  cuvsCagraIndexParamsDestroy(ip);
+  h->n = n;
+  h->dim = dim;
+  fprintf(stderr, "[tiled] small-n CAGRA build n=%ld dim=%ld gd=%ld\n", n, dim, gd);
+  return 0;
+fail:
+  if (h->idx) { cuvsCagraIndexDestroy(h->idx); h->idx = NULL; }
+  if (ip) cuvsCagraIndexParamsDestroy(ip);
+  fprintf(stderr, "[tiled] small-n CAGRA build failed: %s\n", cuvsGetLastErrorText());
+  return 1;
+}
+
 void* seekdb_cuvs_build(const float* base, long n, long dim)
 {
   sk_bf_index* h = (sk_bf_index*)calloc(1, sizeof(*h));
@@ -598,7 +624,15 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h->host_base); free(h); return NULL; }
   memdbg(20, "res_created");
 
+  /* GPU-path audit may build a tiny sample.  The tiled kernel pads to
+     lcm(B,T); small n then produces invalid padding neighbors and can poison
+     the GPU context.  Use cuVS CAGRA's own GPU builder for these tiny indexes. */
   uint32_t* graph = NULL;
+  if (n < 4096) {
+    if (build_small_cagra(h, base, n, dim) != 0) goto fail;
+    return h;
+  }
+
   if (build_exact_tiled_graph(base, n, dim, (int)h->k, B, T, &graph) != 0) goto fail;
   memdbg(21, "bf_graph_done");
   if (env_int("TILED_SKIP_INDEX", 0)) {
@@ -987,6 +1021,32 @@ int seekdb_cuvs_cagra_knn(const float* base, long n, long dim,
                           const float* query, long nq, long topk,
                           unsigned int* out_ids)
 {
+  if (!base || !query || !out_ids || n <= 0 || dim <= 0 || nq <= 0 || topk <= 0) return 1;
+  if (n < 64) {
+    if (topk > n) return 1;
+    for (long qi = 0; qi < nq; ++qi) {
+      float best[64];
+      unsigned int bid[64];
+      for (long t = 0; t < topk; ++t) { best[t] = 3.4e38f; bid[t] = 0xffffffffu; }
+      for (long j = 0; j < n; ++j) {
+        float d = 0.0f;
+        for (long k = 0; k < dim; ++k) {
+          float x = base[j * dim + k] - query[qi * dim + k];
+          d = fmaf(x, x, d);
+        }
+        long pos = topk;
+        for (long t = 0; t < topk; ++t) {
+          if (d < best[t]) { pos = t; break; }
+        }
+        if (pos < topk) {
+          for (long t = topk - 1; t > pos; --t) { best[t] = best[t - 1]; bid[t] = bid[t - 1]; }
+          best[pos] = d; bid[pos] = (unsigned int)j;
+        }
+      }
+      for (long t = 0; t < topk; ++t) out_ids[qi * topk + t] = bid[t];
+    }
+    return 0;
+  }
   void* h = seekdb_cuvs_build(base, n, dim);
   if (!h) return 10;
   int rc = seekdb_cuvs_search(h, query, nq, topk, out_ids, NULL);
