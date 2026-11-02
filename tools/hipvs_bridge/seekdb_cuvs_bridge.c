@@ -661,7 +661,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     }
     gs[1] = index_k;
     uint32_t* d_index_graph = NULL;
-    if (env_int("TILED_DEVICE_GRAPH", dim == 128 ? 0 : 1)) {
+    if (env_int("TILED_DEVICE_GRAPH", 0)) {
       if (hipMalloc((void**)&d_index_graph, (size_t)n * index_k * sizeof(uint32_t)) != hipSuccess) {
         free(compact_graph); free(graph); goto fail;
       }
@@ -676,7 +676,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     graph_t.dl_tensor.dtype.code = kDLUInt;
     unsigned short* half_base = NULL;
     void* pinned_base = NULL;
-    if (!h->fp16 && env_int("TILED_PINNED_DATASET", dim == 128 ? 0 : 1)) {
+    if (!h->fp16 && env_int("TILED_PINNED_DATASET", 0)) {
       if (hipHostMalloc(&pinned_base, (size_t)n * (size_t)dim * sizeof(float), 0) == hipSuccess) {
         memcpy(pinned_base, base, (size_t)n * (size_t)dim * sizeof(float));
       } else {
