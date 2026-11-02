@@ -3,6 +3,7 @@
 #include <cuvs/core/c_api.h>
 #include <cuvs/neighbors/brute_force.h>
 #include <cuvs/neighbors/cagra.h>
+#include <cuvs/neighbors/ivf_flat.h>
 #include <cuvs/distance/distance.h>
 #include <dlpack/dlpack.h>
 #ifdef __HIP_PLATFORM_AMD__
@@ -594,6 +595,65 @@ fail:
   return 1;
 }
 
+
+static int build_ivf_graph(sk_bf_index* h, const float* base, long n, long dim, int K, uint32_t** graph_out)
+{
+  int rc = 1;
+  void* dbase = NULL;
+  int64_t* dnb = NULL; float* ddist = NULL; int64_t* hnb = NULL;
+  cuvsIvfFlatIndexParams_t ip = NULL; cuvsIvfFlatIndex_t idx = NULL; cuvsIvfFlatSearchParams_t sp = NULL;
+  uint32_t* graph = NULL;
+  long chunk = 4096;
+  int nlists = env_int("TILED_IVF_LISTS", 1024);
+  int nprobes = env_int("TILED_IVF_PROBES", 16);
+  if (cudaMalloc((void**)&dbase, (size_t)n * dim * 4) != cudaSuccess) return 1;
+  if (cudaMemcpy(dbase, base, (size_t)n * dim * 4, cudaMemcpyHostToDevice) != cudaSuccess) goto done;
+  if (cuvsIvfFlatIndexParamsCreate(&ip) != CUVS_SUCCESS) goto done;
+  ip->metric = L2Expanded; ip->metric_arg = 0.0f; ip->add_data_on_build = true;
+  ip->n_lists = (uint32_t)nlists; ip->kmeans_n_iters = 20; ip->kmeans_trainset_fraction = 1.0;
+  if (cuvsIvfFlatIndexCreate(&idx) != CUVS_SUCCESS) goto done;
+  {
+    DLManagedTensor dt; long ds[2];
+    set_tensor(&dt, dbase, kDLCUDA, 32, n, dim, ds);
+    if (cuvsIvfFlatBuild(h->res, ip, &dt, idx) != CUVS_SUCCESS) {
+      fprintf(stderr, "[tiled] ivf build failed: %s\n", cuvsGetLastErrorText()); goto done;
+    }
+  }
+  if (cuvsIvfFlatSearchParamsCreate(&sp) != CUVS_SUCCESS) goto done;
+  sp->n_probes = (uint32_t)nprobes;
+  if (cudaMalloc((void**)&dnb, (size_t)chunk * K * 8) != cudaSuccess) goto done;
+  if (cudaMalloc((void**)&ddist, (size_t)chunk * K * 4) != cudaSuccess) goto done;
+  hnb = (int64_t*)malloc((size_t)chunk * K * 8);
+  graph = (uint32_t*)malloc((size_t)n * K * 4);
+  if (!hnb || !graph) goto done;
+  {
+    cuvsFilter filter; filter.type = NO_FILTER; filter.addr = (uintptr_t)0;
+    for (long q0 = 0; q0 < n; q0 += chunk) {
+      long m = n - q0; if (m > chunk) m = chunk;
+      DLManagedTensor qt, nt, dd; long qs[2] = {m, dim}, os[2] = {m, K};
+      set_tensor(&qt, (char*)dbase + (size_t)q0 * dim * 4, kDLCUDA, 32, m, dim, qs);
+      set_tensor(&nt, dnb, kDLCUDA, 64, m, K, os); nt.dl_tensor.dtype.code = kDLInt;
+      set_tensor(&dd, ddist, kDLCUDA, 32, m, K, os);
+      if (cuvsIvfFlatSearch(h->res, sp, idx, &qt, &nt, &dd, filter) != CUVS_SUCCESS) {
+        fprintf(stderr, "[tiled] ivf search failed: %s\n", cuvsGetLastErrorText()); goto done;
+      }
+      if (cudaMemcpy(hnb, dnb, (size_t)m * K * 8, cudaMemcpyDeviceToHost) != cudaSuccess) goto done;
+      for (size_t i = 0, cnt = (size_t)m * K; i < cnt; ++i) graph[(size_t)q0 * K + i] = (uint32_t)hnb[i];
+    }
+  }
+  fprintf(stderr, "[tiled] ivf graph n=%ld dim=%ld K=%d lists=%d probes=%d\n", n, dim, K, nlists, nprobes);
+  *graph_out = graph; graph = NULL; rc = 0;
+done:
+  if (ip) cuvsIvfFlatIndexParamsDestroy(ip);
+  if (idx) cuvsIvfFlatIndexDestroy(idx);
+  if (sp) cuvsIvfFlatSearchParamsDestroy(sp);
+  if (dbase) cudaFree(dbase);
+  if (dnb) cudaFree(dnb);
+  if (ddist) cudaFree(ddist);
+  free(hnb); free(graph);
+  return rc;
+}
+
 void* seekdb_cuvs_build(const float* base, long n, long dim)
 {
   sk_bf_index* h = (sk_bf_index*)calloc(1, sizeof(*h));
@@ -605,7 +665,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   h->graph_k = 0;
   h->index_k = 0;
   int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 100);
-  int expand_seeds = env_int("TILED_EXPAND_SEEDS", h->dim == 128 ? 0 : 80);
+  int expand_seeds = env_int("TILED_EXPAND_SEEDS", h->dim == 128 ? 0 : 140);
   if (rerank_l > 0 || expand_seeds > 0) {
     size_t base_bytes = (size_t)n * (size_t)dim * sizeof(float);
     h->host_base = (float*)malloc(base_bytes);
@@ -635,7 +695,12 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     return h;
   }
 
-  if (build_exact_tiled_graph(base, n, dim, (int)h->k, B, T, &graph) != 0) goto fail;
+  if (dim == 256 && env_int("TILED_BUILD_IVF", 1)) {
+    h->k = 256;
+    if (build_ivf_graph(h, base, n, dim, (int)h->k, &graph) != 0) goto fail;
+  } else {
+    if (build_exact_tiled_graph(base, n, dim, (int)h->k, B, T, &graph) != 0) goto fail;
+  }
   memdbg(21, "bf_graph_done");
   if (env_int("TILED_SKIP_INDEX", 0)) {
     free(graph);
@@ -745,8 +810,8 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   int rc = 0;
   long search_k = topk;
   int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 100);
-  int expand_seeds = env_int("TILED_EXPAND_SEEDS", h->dim == 128 ? 0 : 80);
-  int second_hop = env_int("TILED_SECOND_HOP", h->dim == 128 ? 0 : 40);
+  int expand_seeds = env_int("TILED_EXPAND_SEEDS", h->dim == 128 ? 0 : 140);
+  int second_hop = env_int("TILED_SECOND_HOP", h->dim == 128 ? 0 : 60);
   int expand_deg = env_int("TILED_EXPAND_DEGREE", 0);
   if (expand_deg <= 0 || expand_deg > h->graph_k) expand_deg = (int)h->graph_k;
   int do_refine = h->host_base && (rerank_l > topk || expand_seeds > 0);
