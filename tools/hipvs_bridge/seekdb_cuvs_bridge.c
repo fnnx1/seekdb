@@ -20,10 +20,22 @@
 #include <stdint.h>
 
 typedef struct { float d; unsigned id; } Ranked;
-static int ranked_less(const void* a, const void* b){
-  const Ranked* x=(const Ranked*)a; const Ranked* y=(const Ranked*)b;
-  if(x->d<y->d) return -1; if(x->d>y->d) return 1;
-  return x->id<y->id?-1:(x->id>y->id?1:0);
+static int ranked_before(const Ranked* x,const Ranked* y){
+  return (x->d<y->d)||(x->d==y->d&&x->id<y->id);
+}
+static void rswap(Ranked* a,size_t i,size_t j){Ranked t=a[i];a[i]=a[j];a[j]=t;}
+static size_t rpart(Ranked* a,size_t lo,size_t hi){
+  Ranked p=a[hi]; size_t i=lo;
+  for(size_t j=lo;j<hi;j++){if(ranked_before(&a[j],&p)){rswap(a,i,j);i++;}}
+  rswap(a,i,hi); return i;
+}
+static void rselect(Ranked* a,size_t n,size_t k){
+  if(n==0) return; if(k>=n) k=n-1;
+  size_t lo=0,hi=n-1;
+  while(lo<hi){size_t p=rpart(a,lo,hi);if(p==k)return;if(p<k)lo=p+1;else{if(p==0)return;hi=p-1;}}
+}
+static void rsort(Ranked* a,size_t n){
+  for(size_t i=1;i<n;i++){Ranked v=a[i];size_t j=i;while(j>0&&ranked_before(&v,&a[j-1])){a[j]=a[j-1];j--;}a[j]=v;}
 }
 typedef struct {
   cuvsResources_t res;
@@ -160,12 +172,13 @@ int seekdb_cuvs_search(void* handle,const float* query,long nq,long topk,unsigne
       for(size_t c=0;c<cnt;c++) ranked[c].d=l2(qv,h->host_base+(size_t)ranked[c].id*h->dim,h->dim);
       if(second>0){
         size_t h2=(size_t)second<cnt?(size_t)second:cnt;
-        qsort(ranked,cnt,sizeof(Ranked),ranked_less);
+        rselect(ranked,cnt,h2); rsort(ranked,h2);
         size_t base_cnt=cnt;
         for(size_t c=0;c<h2;c++){unsigned s=ranked[c].id;const uint32_t* gr=h->host_graph+(size_t)s*h->k;for(int j=0;j<deg;j++){unsigned id=gr[j];if((long)id<h->n&&h->stamp[id]!=tag&&cnt<cap){h->stamp[id]=tag;ranked[cnt].id=id;ranked[cnt].d=0;cnt++;}}}
         for(size_t c=base_cnt;c<cnt;c++) ranked[c].d=l2(qv,h->host_base+(size_t)ranked[c].id*h->dim,h->dim);
       }
-      qsort(ranked,cnt,sizeof(Ranked),ranked_less);
+      size_t kk=(size_t)topk<cnt?(size_t)topk:cnt;
+      rselect(ranked,cnt,kk); rsort(ranked,kk);
       for(long j=0;j<topk;j++){if((size_t)j<cnt){out_ids[(size_t)qi*topk+j]=ranked[j].id;if(out_dist)out_dist[(size_t)qi*topk+j]=ranked[j].d;}else{out_ids[(size_t)qi*topk+j]=0;if(out_dist)out_dist[(size_t)qi*topk+j]=INFINITY;}}
     }
   }
