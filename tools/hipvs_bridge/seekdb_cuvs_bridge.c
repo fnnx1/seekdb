@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <hipblas/hipblas.h>
+#include <hip/hip_fp16.h>
 #include <rocprim/rocprim.hpp>
 #include <limits.h>
 #include <stdint.h>
@@ -192,6 +193,25 @@ __global__ static void row_norm_kernel(const float* x, float* norms, long n, lon
   float v = 0.0f;
   for (long j = t; j < dim; j += blockDim.x) {
     float a = x[row * dim + j];
+    v = fmaf(a, a, v);
+  }
+  smem[t] = v;
+  __syncthreads();
+  for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+    if (t < stride) smem[t] += smem[t + stride];
+    __syncthreads();
+  }
+  if (t == 0) norms[row] = smem[0];
+}
+
+__global__ static void row_norm_half_kernel(const __half* x, float* norms, long n, long dim)
+{
+  long row = (long)blockIdx.x;
+  int t = threadIdx.x;
+  __shared__ float smem[256];
+  float v = 0.0f;
+  for (long j = t; j < dim; j += blockDim.x) {
+    float a = __half2float(x[row * dim + j]);
     v = fmaf(a, a, v);
   }
   smem[t] = v;
@@ -437,6 +457,9 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
 {
   int rc = 1;
   float* d_base = NULL;
+  void* d_base_half = NULL;
+  unsigned short* hbase_half = NULL;
+  int use_hgemm = env_int("TILED_HGEMM", dim == 256 ? 1 : 0);
   float* d_norms = NULL;
   float* d_dist = NULL;
   float* cand_k = NULL;
@@ -456,7 +479,8 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   memdbg(10, "bf_enter");
   if (n <= 0 || dim <= 0 || K <= 0 || K > 256 || (K & (K - 1)) != 0 || B <= 0 || T <= 0 ||
       padded_n > INT_MAX || tile_elems > UINT_MAX || candidate_elems > UINT_MAX) return 1;
-  if (hipMalloc((void**)&d_base, (size_t)padded_n * dim * sizeof(float)) != hipSuccess ||
+  if ((!use_hgemm && hipMalloc((void**)&d_base, (size_t)padded_n * dim * sizeof(float)) != hipSuccess) ||
+      (use_hgemm && hipMalloc(&d_base_half, (size_t)padded_n * dim * sizeof(unsigned short)) != hipSuccess) ||
       hipMalloc((void**)&d_norms, (size_t)padded_n * sizeof(float)) != hipSuccess ||
       hipMalloc((void**)&d_dist, tile_elems * sizeof(float)) != hipSuccess ||
       hipMalloc((void**)&cand_k, candidate_elems * sizeof(float)) != hipSuccess ||
@@ -467,28 +491,46 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     goto cleanup;
   }
   memdbg(11, "bf_allocs");
-  if (hipMemcpy(d_base, base, (size_t)n * dim * sizeof(float), hipMemcpyHostToDevice) != hipSuccess) {
-    fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
-    goto cleanup;
-  }
-  {
-    long pad_elems = (padded_n - n) * dim;
-    if (pad_elems > 0) {
-      fill_pad_kernel<<<(unsigned int)((pad_elems + 255) / 256), 256>>>(
-          d_base, (long)n * dim, pad_elems, 1.0e6f);
+  if (use_hgemm) {
+    hbase_half = (unsigned short*)malloc((size_t)padded_n * dim * sizeof(unsigned short));
+    if (!hbase_half) { fprintf(stderr, "[tiled] half host alloc failed\n"); goto cleanup; }
+    for (size_t i = 0, cnt = (size_t)n * dim; i < cnt; ++i) hbase_half[i] = f2h(base[i]);
+    for (size_t i = (size_t)n * dim, cnt = (size_t)padded_n * dim; i < cnt; ++i) hbase_half[i] = f2h(60000.0f);
+    if (hipMemcpy(d_base_half, hbase_half, (size_t)padded_n * dim * sizeof(unsigned short),
+                  hipMemcpyHostToDevice) != hipSuccess) {
+      fprintf(stderr, "[tiled] half initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
+      goto cleanup;
     }
+    free(hbase_half); hbase_half = NULL;
+    if (hipMemset(d_norms, 0, (size_t)padded_n * sizeof(float)) != hipSuccess) {
+      fprintf(stderr, "[tiled] norm memset failed: %s\n", hipGetErrorString(hipGetLastError()));
+      goto cleanup;
+    }
+    row_norm_half_kernel<<<(unsigned int)padded_n, 256>>>((const __half*)d_base_half, d_norms, padded_n, dim);
+  } else {
+    if (hipMemcpy(d_base, base, (size_t)n * dim * sizeof(float), hipMemcpyHostToDevice) != hipSuccess) {
+      fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
+      goto cleanup;
+    }
+    {
+      long pad_elems = (padded_n - n) * dim;
+      if (pad_elems > 0) {
+        fill_pad_kernel<<<(unsigned int)((pad_elems + 255) / 256), 256>>>(
+            d_base, (long)n * dim, pad_elems, 1.0e6f);
+      }
+    }
+    if (hipGetLastError() != hipSuccess ||
+        hipMemset(d_norms, 0, (size_t)padded_n * sizeof(float)) != hipSuccess) {
+      fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
+      goto cleanup;
+    }
+    row_norm_kernel<<<(unsigned int)padded_n, 256>>>(d_base, d_norms, padded_n, dim);
   }
-  if (hipGetLastError() != hipSuccess ||
-      hipMemset(d_norms, 0, (size_t)padded_n * sizeof(float)) != hipSuccess) {
-    fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
-    goto cleanup;
-  }
-  row_norm_kernel<<<(unsigned int)padded_n, 256>>>(d_base, d_norms, padded_n, dim);
   if (hipGetLastError() != hipSuccess || hipDeviceSynchronize() != hipSuccess) {
     fprintf(stderr, "[tiled] norm kernel failed: %s\n", hipGetErrorString(hipGetLastError()));
     goto cleanup;
   }
-  if (use_blas) {
+  if (use_blas || use_hgemm) {
     if (hipblasCreate(&blas) != HIPBLAS_STATUS_SUCCESS) {
       fprintf(stderr, "[tiled] hipblas setup failed\n");
       goto cleanup;
@@ -505,7 +547,19 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     int qrows = (int)((n - q0) < B ? (n - q0) : B);
     for (int tile = 0; tile < ntiles; ++tile) {
       long x0 = (long)tile * T;
-      if (use_blas) {
+      if (use_hgemm) {
+        const float alpha = -2.0f, beta = 0.0f;
+        hipblasStatus_t hs = hipblasGemmEx(blas, HIPBLAS_OP_T, HIPBLAS_OP_N, T, B, (int)dim,
+            &alpha, ((unsigned short*)d_base_half + (size_t)x0 * dim), HIP_R_16F, (int)dim,
+            ((unsigned short*)d_base_half + (size_t)q0 * dim), HIP_R_16F, (int)dim,
+            &beta, d_dist, HIP_R_32F, T, HIPBLAS_COMPUTE_32F, HIPBLAS_GEMM_DEFAULT);
+        if (hs != HIPBLAS_STATUS_SUCCESS) {
+          fprintf(stderr, "[tiled] hgemm failed q=%ld tile=%d status=%d\n", q0, tile, (int)hs);
+          goto cleanup;
+        }
+        finish_distance_tile<<<(unsigned int)((tile_elems + 255) / 256), 256>>>(
+            d_dist, d_norms, n, q0, x0, B, T);
+      } else if (use_blas) {
         const float alpha = -2.0f, beta = 0.0f;
         hipblasStatus_t hs = hipblasSgemm(blas, HIPBLAS_OP_T, HIPBLAS_OP_N,
             T, B, (int)dim, &alpha,
@@ -562,6 +616,8 @@ cleanup:
   if (cand_k) hipFree(cand_k);
   if (d_dist) hipFree(d_dist);
   if (d_norms) hipFree(d_norms);
+  if (hbase_half) free(hbase_half);
+  if (d_base_half) hipFree(d_base_half);
   if (d_base) hipFree(d_base);
   free(graph);
   memdbg(15, "bf_freed");
