@@ -357,7 +357,7 @@ __global__ static void select_topk_kernel(const float* __restrict__ keys,
   if (tid == 0) { s_prefix = 0u; s_rank = (uint32_t)K; }
   __syncthreads();
   uint32_t pmask = 0u;
-  for (int pass = 3; pass >= 0; --pass) {
+  for (int pass = 3; pass >= 1; --pass) {
     for (int i = tid; i < 8 * 256; i += blockDim.x) ((uint32_t*)hist)[i] = 0u;
     __syncthreads();
     uint32_t pm = pmask, pf = s_prefix;
@@ -400,7 +400,7 @@ __global__ static void select_topk_kernel(const float* __restrict__ keys,
         sk[p] = krow[i];
         si[p] = irow ? irow[i] : (uint32_t)(base_id + i);
       }
-    } else if (u == pref) {
+    } else if ((u >> 8) == (pref >> 8)) {
       uint32_t p = atomicAdd(&cnt_eq, 1u);
       if (p < need_eq) {
         sk[need_less + p] = krow[i];
