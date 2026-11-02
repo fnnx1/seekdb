@@ -26,7 +26,6 @@ mkdir -p "$(dirname "$OUTPUT")"
   -O2 \
   -std=c++17 \
   -x hip \
-  --offload-arch=gfx1100 \
   --offload-arch=gfx1030 \
   -D__HIP_PLATFORM_AMD__ \
   -I"$SCRIPT_DIR" \
