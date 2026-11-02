@@ -49,7 +49,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   sk_bf_index* h = (sk_bf_index*)calloc(1, sizeof(*h));
   if (!h) return NULL;
   h->n = n; h->dim = dim;
-  h->k = (dim == 128) ? env_int("BF_K", 64) : env_int("BF_K", 96);
+  h->k = env_int("BF_K", 64);
 
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h); return NULL; }
 
@@ -65,7 +65,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     cuvsBruteForceIndexDestroy(bf); goto fail;
   }
 
-  long chunk = env_int("BF_CHUNK", 32768);
+  long chunk = env_int("BF_CHUNK", 8192);
   if (chunk <= 0) chunk = 32768;
   if (chunk > n) chunk = n;
   int64_t* d_ids = NULL; float* d_dist = NULL;
