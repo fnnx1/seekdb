@@ -49,7 +49,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   sk_bf_index* h = (sk_bf_index*)calloc(1, sizeof(*h));
   if (!h) return NULL;
   h->n = n; h->dim = dim;
-  h->k = (dim == 128) ? env_int("BF_K", 64) : env_int("BF_K", 60);
+  h->k = (dim == 128) ? env_int("BF_K", 64) : env_int("BF_K", 96);
 
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h); return NULL; }
 
