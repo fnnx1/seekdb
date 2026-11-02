@@ -37,6 +37,7 @@ typedef struct {
   float* host_base;
   uint32_t* host_graph;
   long graph_k;
+  long index_k;
   int fp16;
   uint32_t* stamp;
   uint32_t stamp_gen;
@@ -602,6 +603,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   h->host_base = NULL;
   h->host_graph = NULL;
   h->graph_k = 0;
+  h->index_k = 0;
   int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 100);
   int expand_seeds = env_int("TILED_EXPAND_SEEDS", h->dim == 128 ? 0 : 80);
   if (rerank_l > 0 || expand_seeds > 0) {
@@ -700,6 +702,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     }
     if (d_index_graph) { h->d_graph = d_index_graph; }
     if (pinned_base) { h->pinned_base = pinned_base; }
+    h->index_k = index_k;
     free(half_base);
     free(compact_graph);
     memdbg(23, "import_done");
@@ -898,38 +901,30 @@ int seekdb_cuvs_serialize(void* handle, const char* filename)
     return 1;
   }
   memdbg(31, "serialize_cuvs_done");
-  if (h->host_base && h->host_graph && h->graph_k > 0) {
+  if (h->host_graph && h->graph_k > 0) {
     int64_t hn = h->n, hd = h->dim, hk = h->graph_k;
-    uint64_t data_bytes = (uint64_t)(sizeof(uint64_t) + 3 * sizeof(int64_t)) +
-                          (uint64_t)hn * hd * sizeof(float) +
-                          (uint64_t)hn * hk * sizeof(uint32_t);
+    int64_t first = h->index_k;
+    if (first < 0 || first >= hk) first = hk / 2;
+    uint64_t data_bytes = (uint64_t)(5 * sizeof(int64_t)) +
+                          (uint64_t)hn * (uint64_t)(hk - first) * sizeof(uint32_t);
     int embed = env_int("TILED_EMBED_SIDECAR", h->dim == 128 ? 0 : 1);
     if (embed) {
       FILE* f = fopen(filename, "ab");
       if (!f) { fprintf(stderr, "[tiled] embed open failed: %s\n", filename); return 0; }
-      uint64_t magic = 0x544C4432ULL;
-      fwrite(&magic, sizeof(magic), 1, f);
-      fwrite(&hn, sizeof(hn), 1, f);
-      fwrite(&hd, sizeof(hd), 1, f);
-      fwrite(&hk, sizeof(hk), 1, f);
-      fwrite(h->host_base, sizeof(float), (size_t)hn * hd, f);
-      fwrite(h->host_graph, sizeof(uint32_t), (size_t)hn * hk, f);
-      fwrite(&data_bytes, sizeof(data_bytes), 1, f);
-      fwrite(&magic, sizeof(magic), 1, f);
-      fclose(f);
-    } else {
-      char path[4096];
-      snprintf(path, sizeof(path), "%s.tiled", filename);
-      FILE* f = fopen(path, "wb");
-      if (!f) { fprintf(stderr, "[tiled] sidecar open failed: %s\n", path); return 0; }
-      uint64_t magic = 0x544C4431ULL;
-      fwrite(&magic, sizeof(magic), 1, f);
-      fwrite(&hn, sizeof(hn), 1, f);
-      fwrite(&hd, sizeof(hd), 1, f);
-      fwrite(&hk, sizeof(hk), 1, f);
-      fwrite(h->host_base, sizeof(float), (size_t)hn * hd, f);
-      fwrite(h->host_graph, sizeof(uint32_t), (size_t)hn * hk, f);
-      fclose(f);
+      uint64_t magic = 0x544C4433ULL;
+      int bad = 0;
+      bad |= fwrite(&magic, sizeof(magic), 1, f) != 1;
+      bad |= fwrite(&hn, sizeof(hn), 1, f) != 1;
+      bad |= fwrite(&hd, sizeof(hd), 1, f) != 1;
+      bad |= fwrite(&hk, sizeof(hk), 1, f) != 1;
+      bad |= fwrite(&first, sizeof(first), 1, f) != 1;
+      for (long row = 0; row < hn; ++row)
+        bad |= fwrite(h->host_graph + (size_t)row * hk + first, sizeof(uint32_t),
+                      (size_t)(hk - first), f) != (size_t)(hk - first);
+      bad |= fwrite(&data_bytes, sizeof(data_bytes), 1, f) != 1;
+      bad |= fwrite(&magic, sizeof(magic), 1, f) != 1;
+      if (fclose(f) != 0) bad = 1;
+      if (bad) { fprintf(stderr, "[tiled] compact sidecar write failed\n"); return 1; }
     }
   }
   memdbg(32, "serialize_done");
@@ -942,6 +937,9 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
   sk_bf_index* h = (sk_bf_index*)calloc(1, sizeof(*h));
   if (!h) return NULL;
   h->n = n; h->dim = dim;
+  long long sc_start = -1;
+  uint64_t sc_sz = 0;
+  int64_t sc_hk = 0, sc_first = 0;
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { fprintf(stderr, "[deser] resources failed: %s\n", cuvsGetLastErrorText()); goto fail; }
   if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) { fprintf(stderr, "[deser] index create failed: %s\n", cuvsGetLastErrorText()); goto fail; }
   if (cuvsCagraDeserialize(h->res, filename, h->idx) != CUVS_SUCCESS) { fprintf(stderr, "[deser] cagra deserialize failed: %s\n", cuvsGetLastErrorText()); goto fail; }
@@ -949,64 +947,80 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
   {
     FILE* f = fopen(filename, "rb");
     if (f) {
-      int loaded = 0;
-      if (!loaded && fseek(f, 0, SEEK_END) == 0) {
+      if (fseek(f, 0, SEEK_END) == 0) {
         long long fs = ftell(f);
-        if (fs > 32) {
+        if (fs > 48) {
           uint64_t sz = 0, tmagic = 0;
           if (fseek(f, (long)(fs - 16), SEEK_SET) == 0 &&
               fread(&sz, sizeof(sz), 1, f) == 1 &&
               fread(&tmagic, sizeof(tmagic), 1, f) == 1 &&
-              tmagic == 0x544C4432ULL && sz > 0 && (long long)sz + 16 <= fs) {
+              tmagic == 0x544C4433ULL && sz > 0 && (long long)sz + 16 <= fs) {
             if (fseek(f, (long)(fs - 16 - (long long)sz), SEEK_SET) == 0) {
-              uint64_t magic = 0; int64_t hn = 0, hd = 0, hk = 0;
+              uint64_t magic = 0; int64_t hn = 0, hd = 0, hk = 0, first = 0;
               if (fread(&magic, sizeof(magic), 1, f) == 1 &&
                   fread(&hn, sizeof(hn), 1, f) == 1 &&
                   fread(&hd, sizeof(hd), 1, f) == 1 &&
                   fread(&hk, sizeof(hk), 1, f) == 1 &&
-                  magic == 0x544C4432ULL && hn == n && hd == dim && hk > 0 && hk <= 256) {
-                h->host_base = (float*)malloc((size_t)hn * hd * sizeof(float));
-                h->host_graph = (uint32_t*)malloc((size_t)hn * hk * sizeof(uint32_t));
-                if (h->host_base && h->host_graph &&
-                    fread(h->host_base, sizeof(float), (size_t)hn * hd, f) == (size_t)hn * hd &&
-                    fread(h->host_graph, sizeof(uint32_t), (size_t)hn * hk, f) == (size_t)hn * hk) {
-                  h->graph_k = hk;
-                  loaded = 1;
-                } else {
-                  free(h->host_base); free(h->host_graph);
-                  h->host_base = NULL; h->host_graph = NULL; h->graph_k = 0;
-                }
+                  fread(&first, sizeof(first), 1, f) == 1 &&
+                  magic == 0x544C4433ULL && hn == n && hd == dim &&
+                  hk > 0 && hk <= 256 && first >= 0 && first < hk) {
+                sc_start = fs - 16 - (long long)sz;
+                sc_sz = sz; sc_hk = hk; sc_first = first;
               }
             }
           }
         }
       }
-      if (!loaded) {
-        char path[4096];
-        snprintf(path, sizeof(path), "%s.tiled", filename);
-        FILE* g = fopen(path, "rb");
-        if (g) {
-          uint64_t magic = 0; int64_t hn = 0, hd = 0, hk = 0;
-          if (fread(&magic, sizeof(magic), 1, g) == 1 &&
-              fread(&hn, sizeof(hn), 1, g) == 1 &&
-              fread(&hd, sizeof(hd), 1, g) == 1 &&
-              fread(&hk, sizeof(hk), 1, g) == 1 &&
-              magic == 0x544C4431ULL && hn == n && hd == dim && hk > 0 && hk <= 256) {
-            h->host_base = (float*)malloc((size_t)hn * hd * sizeof(float));
-            h->host_graph = (uint32_t*)malloc((size_t)hn * hk * sizeof(uint32_t));
-            if (h->host_base && h->host_graph &&
-                fread(h->host_base, sizeof(float), (size_t)hn * hd, g) == (size_t)hn * hd &&
-                fread(h->host_graph, sizeof(uint32_t), (size_t)hn * hk, g) == (size_t)hn * hk) {
-              h->graph_k = hk;
-            } else {
-              free(h->host_base); free(h->host_graph);
-              h->host_base = NULL; h->host_graph = NULL; h->graph_k = 0;
+      fclose(f);
+    }
+  }
+  /* Recover the FP32 base from the CAGRA snapshot (no base sidecar). */
+  {
+    DLManagedTensor dv; memset(&dv, 0, sizeof(dv));
+    if (cuvsCagraIndexGetDataset(h->idx, &dv) == CUVS_SUCCESS &&
+        dv.dl_tensor.data && dv.dl_tensor.dtype.bits == 32 &&
+        dv.dl_tensor.shape[0] == n && dv.dl_tensor.shape[1] == dim) {
+      h->host_base = (float*)malloc((size_t)n * dim * sizeof(float));
+      if (h->host_base &&
+          cudaMemcpy(h->host_base, dv.dl_tensor.data, (size_t)n * dim * sizeof(float),
+                     cudaMemcpyDeviceToHost) != cudaSuccess) {
+        free(h->host_base); h->host_base = NULL;
+      }
+    }
+  }
+  /* First graph degree comes from the CAGRA index; the rest from the compact sidecar. */
+  {
+    DLManagedTensor gv; memset(&gv, 0, sizeof(gv));
+    if (cuvsCagraIndexGetGraph(h->idx, &gv) == CUVS_SUCCESS && gv.dl_tensor.data &&
+        gv.dl_tensor.dtype.bits == 32 && gv.dl_tensor.shape[0] == n) {
+      long gdeg = (long)gv.dl_tensor.shape[1];
+      if (gdeg > 0 && gdeg <= 256) {
+        long full = (sc_hk > gdeg) ? (long)sc_hk : gdeg;
+        uint32_t* tmp = (uint32_t*)malloc((size_t)n * gdeg * sizeof(uint32_t));
+        if (tmp && cudaMemcpy(tmp, gv.dl_tensor.data, (size_t)n * gdeg * sizeof(uint32_t),
+                              cudaMemcpyDeviceToHost) == cudaSuccess) {
+          h->host_graph = (uint32_t*)malloc((size_t)n * full * sizeof(uint32_t));
+          if (h->host_graph) {
+            for (long row = 0; row < n; ++row)
+              memcpy(h->host_graph + (size_t)row * full, tmp + (size_t)row * gdeg,
+                     (size_t)gdeg * sizeof(uint32_t));
+            h->graph_k = full;
+            h->index_k = gdeg;
+            if (sc_start >= 0 && sc_hk == full && sc_first == gdeg) {
+              FILE* f = fopen(filename, "rb");
+              if (f) {
+                int ok = fseek(f, (long)(sc_start + 5 * (long long)sizeof(int64_t)), SEEK_SET) == 0;
+                for (long row = 0; ok && row < n; ++row)
+                  ok = fread(h->host_graph + (size_t)row * full + gdeg, sizeof(uint32_t),
+                             (size_t)(full - gdeg), f) == (size_t)(full - gdeg);
+                fclose(f);
+                if (!ok) { free(h->host_graph); h->host_graph = NULL; h->graph_k = 0; h->index_k = 0; }
+              }
             }
           }
-          fclose(g);
         }
+        free(tmp);
       }
-      fclose(f);
     }
   }
   return h;
