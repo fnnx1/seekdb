@@ -24,6 +24,8 @@ mkdir -p "$(dirname "$OUTPUT")"
   -shared \
   -fPIC \
   -O3 \
+  -static-libstdc++ \
+  -static-libgcc \
   -std=c++17 \
   -x hip \
   -D__HIP_PLATFORM_AMD__ \
