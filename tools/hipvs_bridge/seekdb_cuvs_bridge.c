@@ -177,6 +177,12 @@ static void set_tensor(DLManagedTensor* t, void* data, DLDeviceType dev, int bit
   t->dl_tensor.byte_offset = 0;
 }
 
+__global__ static void fill_pad_kernel(float* x, long start, long count, float v)
+{
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < count) x[start + i] = v;
+}
+
 __global__ static void row_norm_kernel(const float* x, float* norms, long n, long dim)
 {
   long row = (long)blockIdx.x;
@@ -460,8 +466,18 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     goto cleanup;
   }
   memdbg(11, "bf_allocs");
-  if (hipMemcpy(d_base, base, (size_t)n * dim * sizeof(float), hipMemcpyHostToDevice) != hipSuccess ||
-      hipMemset(d_base + (size_t)n * dim, 0, (size_t)(padded_n - n) * dim * sizeof(float)) != hipSuccess ||
+  if (hipMemcpy(d_base, base, (size_t)n * dim * sizeof(float), hipMemcpyHostToDevice) != hipSuccess) {
+    fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
+    goto cleanup;
+  }
+  {
+    long pad_elems = (padded_n - n) * dim;
+    if (pad_elems > 0) {
+      fill_pad_kernel<<<(unsigned int)((pad_elems + 255) / 256), 256>>>(
+          d_base, (long)n * dim, pad_elems, 1.0e6f);
+    }
+  }
+  if (hipGetLastError() != hipSuccess ||
       hipMemset(d_norms, 0, (size_t)padded_n * sizeof(float)) != hipSuccess) {
     fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
     goto cleanup;
@@ -574,6 +590,11 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   int B = env_int("TILED_Q_BLOCK", dim == 128 ? 1024 : 256);
   int T = env_int("TILED_BASE_TILE", dim == 128 ? 8192 : 16384);
   if (B <= 0 || T <= 0 || h->k <= 0 || h->k > 256) { free(h); return NULL; }
+  if (h->k > n) {
+    long kk = 1;
+    while (kk * 2 <= n && kk * 2 <= 256) kk *= 2;
+    h->k = kk;
+  }
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h->host_base); free(h); return NULL; }
   memdbg(20, "res_created");
 
