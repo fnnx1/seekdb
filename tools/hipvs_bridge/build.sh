@@ -23,15 +23,21 @@ mkdir -p "$(dirname "$OUTPUT")"
 "$HIPCC" \
   -shared \
   -fPIC \
-  -O2 \
+  -O3 \
+  -std=c++17 \
+  -x hip \
   -D__HIP_PLATFORM_AMD__ \
+  -I"$SCRIPT_DIR" \
   -I"$HIPVS_ROOT/include" \
+  -I"$HIPVS_ROOT/include/cuvs" \
   -I"$ROCM_ROOT/include" \
   "$SCRIPT_DIR/seekdb_cuvs_bridge.c" \
   -L"$HIPVS_ROOT/lib" \
   -Wl,-soname,libseekdb_cuvs_bridge.so \
   -Wl,-rpath,"$HIPVS_ROOT/lib:$ROCM_ROOT/lib" \
   -lcuvs_c \
+  -lcuvs \
+  -lhipblas \
   -o "$OUTPUT"
 
 echo "built $OUTPUT"
