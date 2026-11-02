@@ -584,9 +584,8 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     free(graph);
     return h;
   }
-  /* BF uses direct HIP allocations; release any process-level RMM pool/cache before CAGRA import. */
-  if (cuvsRMMMemoryResourceReset() != CUVS_SUCCESS)
-    fprintf(stderr, "[tiled] RMM resource reset warning: %s\n", cuvsGetLastErrorText());
+  /* BF uses direct HIP allocations; do not reset the process-wide RMM pool:
+     the seekdb service may have other CAGRA indexes alive in the same process. */
   if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) { free(graph); goto fail; }
   memdbg(22, "import_begin");
   {
