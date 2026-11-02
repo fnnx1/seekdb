@@ -604,8 +604,8 @@ static int build_ivf_graph(sk_bf_index* h, const float* base, long n, long dim, 
   cuvsIvfFlatIndexParams_t ip = NULL; cuvsIvfFlatIndex_t idx = NULL; cuvsIvfFlatSearchParams_t sp = NULL;
   uint32_t* graph = NULL;
   long chunk = 4096;
-  int nlists = env_int("TILED_IVF_LISTS", 1024);
-  int nprobes = env_int("TILED_IVF_PROBES", 48);
+  int nlists = env_int("TILED_IVF_LISTS", 4096);
+  int nprobes = env_int("TILED_IVF_PROBES", 128);
   if (cudaMalloc((void**)&dbase, (size_t)n * dim * 4) != cudaSuccess) return 1;
   if (cudaMemcpy(dbase, base, (size_t)n * dim * 4, cudaMemcpyHostToDevice) != cudaSuccess) goto done;
   if (cuvsIvfFlatIndexParamsCreate(&ip) != CUVS_SUCCESS) goto done;
