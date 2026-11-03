@@ -28,6 +28,31 @@
 #include <thread>
 #include <chrono>
 
+/* ---- env-gated profiling (TILED_TIME=1): host-time accumulators, ms ---- */
+static int g_time = 0;
+static double g_t_copyin = 0, g_t_gemm = 0, g_t_fin = 0, g_t_tsel = 0,
+              g_t_fsel = 0, g_t_gcopy = 0, g_t_import = 0, g_t_total = 0;
+static long g_n_gemm = 0;
+
+static inline double sk_now_ms()
+{
+  return std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void sk_time_report(const char* tag)
+{
+  if (!g_time) return;
+  fprintf(stderr,
+          "[time] %s total=%.1f gemm=%.1f (n=%ld, %.2f ms/call) fin=%.1f tsel=%.1f "
+          "fsel=%.1f gcopy=%.1f import=%.1f copyin=%.1f other=%.1f ms\n",
+          tag, g_t_total, g_t_gemm, g_n_gemm,
+          g_n_gemm ? g_t_gemm / (double)g_n_gemm : 0.0,
+          g_t_fin, g_t_tsel, g_t_fsel, g_t_gcopy, g_t_import, g_t_copyin,
+          g_t_total - (g_t_gemm + g_t_fin + g_t_tsel + g_t_fsel + g_t_gcopy +
+                       g_t_import + g_t_copyin));
+}
+
 typedef struct {
   cuvsResources_t res;
   cuvsCagraIndex_t idx;
@@ -432,6 +457,236 @@ __global__ static void select_topk_kernel(const float* __restrict__ keys,
   }
 }
 
+/* ---------------- fused finish + exact top-K tile select ----------------
+ * The per-column norm correction of finish_distance_tile is folded into the
+ * key computation (key = dot + (nq + nx), bit-identical arithmetic), removing
+ * one full read+write of the tile.  Selection is a 3-pass scheme: two
+ * narrowing passes over the row (11 + 11 high bits) resolve a 22-bit prefix,
+ * then a single collect pass sends the (few) candidates that match the prefix
+ * to shared memory where the last 10 bits are resolved.  Degenerate data that
+ * overflows the candidate buffer falls back to two more global passes. */
+#define STK_NT 256
+#define STK_HB 2048
+#define STK_CAP 512
+#define STK_P1_BITS 11
+#define STK_LO_BITS 10
+#define STK_P1_SHIFT (32 - STK_P1_BITS)
+
+__device__ static void stk_pick(uint32_t* hist, uint32_t* part, int nb, int shift,
+                                uint32_t rank, uint32_t pat, uint32_t less_base,
+                                uint32_t* out_pat, uint32_t* out_less, uint32_t* out_rank,
+                                int tid)
+{
+  const int per = nb / STK_NT;
+  uint32_t mysum = 0;
+  for (int j = 0; j < per; ++j) mysum += hist[tid * per + j];
+  part[tid] = mysum;
+  __syncthreads();
+  for (int off = 1; off < STK_NT; off <<= 1) {
+    uint32_t v = (tid >= off) ? part[tid - off] : 0u;
+    __syncthreads();
+    part[tid] += v;
+    __syncthreads();
+  }
+  uint32_t excl = part[tid] - mysum;
+  if (rank > excl && rank <= excl + mysum) {
+    uint32_t cum = excl;
+    for (int j = 0; j < per; ++j) {
+      uint32_t c = hist[tid * per + j];
+      if (cum + c >= rank) {
+        *out_pat = pat | ((uint32_t)(tid * per + j) << shift);
+        *out_less = less_base + cum;
+        *out_rank = rank - cum;
+        break;
+      }
+      cum += c;
+    }
+  }
+  __syncthreads();
+}
+
+/* body sees i (int), v (float key), u (uint32 bits of v) */
+#define STK_FOR_EACH(BODY)                                                              \
+  {                                                                                     \
+    const int _vend = Cv & ~3;                                                          \
+    int _i = tid * 4;                                                                   \
+    for (; _i < _vend; _i += STK_NT * 4) {                                              \
+      float4 _d = *(const float4*)(drow + _i);                                          \
+      float4 _n = RAW ? *(const float4*)(nx + _i) : make_float4(0.f, 0.f, 0.f, 0.f);     \
+      float _k0 = RAW ? (_d.x + (nq + _n.x)) : _d.x;                                     \
+      float _k1 = RAW ? (_d.y + (nq + _n.y)) : _d.y;                                     \
+      float _k2 = RAW ? (_d.z + (nq + _n.z)) : _d.z;                                     \
+      float _k3 = RAW ? (_d.w + (nq + _n.w)) : _d.w;                                     \
+      { const int i = _i; const float v = _k0; const uint32_t u = __float_as_uint(v); BODY } \
+      { const int i = _i + 1; const float v = _k1; const uint32_t u = __float_as_uint(v); BODY } \
+      { const int i = _i + 2; const float v = _k2; const uint32_t u = __float_as_uint(v); BODY } \
+      { const int i = _i + 3; const float v = _k3; const uint32_t u = __float_as_uint(v); BODY } \
+    }                                                                                   \
+    for (int _j = _vend + tid; _j < Cv; _j += STK_NT) {                                  \
+      const int i = _j;                                                                  \
+      const float v = RAW ? (drow[_j] + (nq + nx[_j])) : drow[_j];                        \
+      const uint32_t u = __float_as_uint(v);                                             \
+      BODY                                                                              \
+    }                                                                                   \
+  }
+
+template <bool RAW>
+__global__ static void select_tile_fused_kernel(const float* __restrict__ dots,
+                                                const float* __restrict__ norms,
+                                                long x0, int Cv, int stride,
+                                                int K, long q0,
+                                                float* __restrict__ out_keys,
+                                                uint32_t* __restrict__ out_ids,
+                                                int out_stride)
+{
+  const int row = blockIdx.x;
+  const int tid = threadIdx.x;
+  const float* drow = dots + (size_t)row * stride;
+  const float* nx = norms + x0;
+  const float nq = RAW ? norms[q0 + row] : 0.0f;
+
+  __shared__ uint32_t hist[STK_HB];
+  __shared__ uint32_t part[STK_NT];
+  __shared__ float ck[STK_CAP];
+  __shared__ uint32_t ci[STK_CAP];
+  __shared__ float sk[STK_NT];
+  __shared__ uint32_t si[STK_NT];
+  __shared__ uint32_t s_pat, s_less, s_rank, cnt_c, cnt_ovf, cnt_l;
+
+  float* ok = out_keys + (size_t)row * out_stride;
+  uint32_t* oi = out_ids + (size_t)row * out_stride;
+
+  if (Cv <= K || Cv <= 0) {
+    for (int i = tid; i < K; i += STK_NT) {
+      float v = INFINITY;
+      uint32_t id = 0u;
+      if (i < Cv) {
+        v = RAW ? (drow[i] + (nq + nx[i])) : drow[i];
+        id = (uint32_t)(x0 + i);
+      }
+      ok[i] = v;
+      oi[i] = id;
+    }
+    return;
+  }
+
+  if (tid == 0) { s_pat = 0u; s_less = 0u; s_rank = (uint32_t)K; }
+  for (int i = tid; i < STK_HB; i += STK_NT) hist[i] = 0u;
+  __syncthreads();
+  STK_FOR_EACH({ atomicAdd(&hist[u >> STK_P1_SHIFT], 1u); });
+  __syncthreads();
+  {
+    uint32_t pat = s_pat, less = s_less, rank = s_rank;
+    stk_pick(hist, part, STK_HB, STK_P1_SHIFT, rank, pat, less,
+             &s_pat, &s_less, &s_rank, tid);
+  }
+
+  const uint32_t m1 = ~((1u << STK_P1_SHIFT) - 1u);
+  for (int i = tid; i < STK_HB; i += STK_NT) hist[i] = 0u;
+  __syncthreads();
+  {
+    const uint32_t pat = s_pat;
+    STK_FOR_EACH({
+      if ((u & m1) == pat) atomicAdd(&hist[(u >> STK_LO_BITS) & (STK_HB - 1u)], 1u);
+    });
+  }
+  __syncthreads();
+  {
+    uint32_t pat = s_pat, less = s_less, rank = s_rank;
+    stk_pick(hist, part, STK_HB, STK_LO_BITS, rank, pat, less,
+             &s_pat, &s_less, &s_rank, tid);
+  }
+
+  /* collect pass */
+  const uint32_t m2 = ~((1u << STK_LO_BITS) - 1u);
+  const uint32_t lopmask = (1u << STK_LO_BITS) - 1u;
+  const uint32_t pat2 = s_pat;
+  const uint32_t need_eq = s_rank;
+  const uint32_t need_less = (uint32_t)K - need_eq;
+  if (tid == 0) { cnt_c = 0u; cnt_ovf = 0u; cnt_l = 0u; }
+  __syncthreads();
+  STK_FOR_EACH({
+    if ((u & m2) == pat2) {
+      uint32_t p = atomicAdd(&cnt_c, 1u);
+      if (p < (uint32_t)STK_CAP) { ck[p] = v; ci[p] = (uint32_t)(x0 + i); }
+      else atomicAdd(&cnt_ovf, 1u);
+    } else if (u < pat2) {
+      uint32_t p = atomicAdd(&cnt_l, 1u);
+      if (p < need_less) { sk[p] = v; si[p] = (uint32_t)(x0 + i); }
+    }
+  });
+  __syncthreads();
+  const uint32_t n_c = cnt_c;
+  const uint32_t ovf = cnt_ovf;
+
+  if (ovf == 0u) {
+    for (int i = tid; i < (1 << STK_LO_BITS); i += STK_NT) hist[i] = 0u;
+    __syncthreads();
+    for (uint32_t i = tid; i < n_c; i += STK_NT)
+      atomicAdd(&hist[__float_as_uint(ck[i]) & lopmask], 1u);
+    __syncthreads();
+    if (tid == 0) { s_pat = 0u; s_less = 0u; s_rank = need_eq; }
+    __syncthreads();
+    {
+      uint32_t pat = s_pat, less = s_less, rank = s_rank;
+      stk_pick(hist, part, 1 << STK_LO_BITS, 0, rank, pat, less,
+               &s_pat, &s_less, &s_rank, tid);
+    }
+    const uint32_t lop = s_pat;
+    const uint32_t lo_less = s_less;
+    const uint32_t lo_eq = s_rank;
+    if (tid == 0) { cnt_l = 0u; cnt_c = 0u; }
+    __syncthreads();
+    for (uint32_t i = tid; i < n_c; i += STK_NT) {
+      uint32_t lu = __float_as_uint(ck[i]) & lopmask;
+      if (lu < lop) {
+        uint32_t p = atomicAdd(&cnt_l, 1u);
+        if (p < lo_less) { sk[need_less + p] = ck[i]; si[need_less + p] = ci[i]; }
+      } else if (lu == lop) {
+        uint32_t p = atomicAdd(&cnt_c, 1u);
+        if (p < lo_eq) { sk[need_less + lo_less + p] = ck[i]; si[need_less + lo_less + p] = ci[i]; }
+      }
+    }
+  } else {
+    for (int i = tid; i < (1 << STK_LO_BITS); i += STK_NT) hist[i] = 0u;
+    __syncthreads();
+    {
+      const uint32_t p2 = pat2;
+      STK_FOR_EACH({
+        if ((u & m2) == p2) atomicAdd(&hist[u & lopmask], 1u);
+      });
+    }
+    __syncthreads();
+    if (tid == 0) { s_less = 0u; s_rank = need_eq; }
+    __syncthreads();
+    {
+      uint32_t pat = pat2, less = 0u, rank = need_eq;
+      stk_pick(hist, part, 1 << STK_LO_BITS, 0, rank, pat, less,
+               &s_pat, &s_less, &s_rank, tid);
+    }
+    const uint32_t pat3 = s_pat | (pat2 & m2);
+    const uint32_t less3 = s_less;
+    const uint32_t eq3 = s_rank;
+    if (tid == 0) { cnt_l = 0u; cnt_c = 0u; }
+    __syncthreads();
+    const uint32_t base3 = need_less + less3;
+    STK_FOR_EACH({
+      if (u < pat3) {
+        uint32_t p = atomicAdd(&cnt_l, 1u);
+        if (p < base3) { sk[p] = v; si[p] = (uint32_t)(x0 + i); }
+      } else if (u == pat3) {
+        uint32_t p = atomicAdd(&cnt_c, 1u);
+        if (p < eq3) { sk[base3 + p] = v; si[base3 + p] = (uint32_t)(x0 + i); }
+      }
+    });
+  }
+  __syncthreads();
+  for (int i = tid; i < K; i += STK_NT) {
+    ok[i] = sk[i];
+    oi[i] = si[i];
+  }
+}
+
 static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
                                    int B, int T, uint32_t** graph_out)
 {
@@ -452,8 +707,15 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   int cpr = ntiles * K;
   size_t tile_elems = (size_t)B * T;
   size_t candidate_elems = (size_t)B * cpr;
+  double _t0 = 0, _t_fn = 0;
 
   memdbg(10, "bf_enter");
+  g_time = env_int("TILED_TIME", 0);
+  g_t_copyin = g_t_gemm = g_t_fin = g_t_tsel = g_t_fsel = g_t_gcopy = 0;
+  g_n_gemm = 0;
+  _t_fn = sk_now_ms();
+  int time_skip_gemm = env_int("TILED_TIME_SKIP_GEMM", 0);
+  int time_skip_sel = env_int("TILED_TIME_SKIP_SEL", 0);
   if (n <= 0 || dim <= 0 || K <= 0 || K > 256 || (K & (K - 1)) != 0 || B <= 0 || T <= 0 ||
       padded_n > INT_MAX || tile_elems > UINT_MAX || candidate_elems > UINT_MAX) return 1;
   if (hipMalloc((void**)&d_base, (size_t)padded_n * dim * sizeof(float)) != hipSuccess ||
@@ -467,6 +729,7 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     goto cleanup;
   }
   memdbg(11, "bf_allocs");
+  _t0 = sk_now_ms();
   if (hipMemcpy(d_base, base, (size_t)n * dim * sizeof(float), hipMemcpyHostToDevice) != hipSuccess) {
     fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
     goto cleanup;
@@ -488,6 +751,7 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     fprintf(stderr, "[tiled] norm kernel failed: %s\n", hipGetErrorString(hipGetLastError()));
     goto cleanup;
   }
+  if (g_time) g_t_copyin = sk_now_ms() - _t0;
   if (use_blas) {
     if (hipblasCreate(&blas) != HIPBLAS_STATUS_SUCCESS) {
       fprintf(stderr, "[tiled] hipblas setup failed\n");
@@ -505,6 +769,7 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     int qrows = (int)((n - q0) < B ? (n - q0) : B);
     for (int tile = 0; tile < ntiles; ++tile) {
       long x0 = (long)tile * T;
+      _t0 = sk_now_ms();
       if (use_blas) {
         const float alpha = -2.0f, beta = 0.0f;
         hipblasStatus_t hs = hipblasSgemm(blas, HIPBLAS_OP_T, HIPBLAS_OP_N,
@@ -516,8 +781,7 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
           fprintf(stderr, "[tiled] sgemm failed q=%ld tile=%d status=%d\n", q0, tile, (int)hs);
           goto cleanup;
         }
-        finish_distance_tile<<<(unsigned int)((tile_elems + 255) / 256), 256>>>(
-            d_dist, d_norms, n, q0, x0, B, T);
+        if (g_time) { hipDeviceSynchronize(); g_t_gemm += sk_now_ms() - _t0; g_n_gemm++; _t0 = sk_now_ms(); }
       } else {
         dim3 gdim((unsigned int)((B + DT_BM - 1) / DT_BM), (unsigned int)(T / DT_BN));
         dist_tile_kernel<<<gdim, 256>>>(d_base, d_base, d_norms, d_dist,
@@ -527,28 +791,46 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
         fprintf(stderr, "[tiled] distance kernel failed: %s\n", hipGetErrorString(hipGetLastError()));
         goto cleanup;
       }
-      select_topk_kernel<<<(unsigned int)B, 256>>>(
-          d_dist, nullptr, T, T, K, x0, cpr, cand_k + tile * K, cand_id + tile * K);
+      if (g_time) { hipDeviceSynchronize(); g_t_fin += sk_now_ms() - _t0; }
+      _t0 = sk_now_ms();
+      {
+        int cv = (n - x0) < (long)T ? (int)(n - x0) : T;
+        if (cv < 0) cv = 0;
+        if (use_blas)
+          select_tile_fused_kernel<true><<<(unsigned int)B, STK_NT>>>(
+              d_dist, d_norms, x0, cv, T, K, q0,
+              cand_k + tile * K, cand_id + tile * K, cpr);
+        else
+          select_tile_fused_kernel<false><<<(unsigned int)B, STK_NT>>>(
+              d_dist, d_norms, x0, cv, T, K, q0,
+              cand_k + tile * K, cand_id + tile * K, cpr);
+      }
       if (hipGetLastError() != hipSuccess) {
         fprintf(stderr, "[tiled] tile select failed: %s\n", hipGetErrorString(hipGetLastError()));
         goto cleanup;
       }
+      if (g_time) { hipDeviceSynchronize(); g_t_tsel += sk_now_ms() - _t0; }
     }
+    _t0 = sk_now_ms();
     select_topk_kernel<<<(unsigned int)B, 256>>>(
         cand_k, cand_id, cpr, cpr, K, 0, K, d_graph_k, d_graph_block);
     if (hipGetLastError() != hipSuccess || hipDeviceSynchronize() != hipSuccess) {
       fprintf(stderr, "[tiled] final select failed: %s\n", hipGetErrorString(hipGetLastError()));
       goto cleanup;
     }
+    if (g_time) g_t_fsel += sk_now_ms() - _t0;
+    _t0 = sk_now_ms();
     if (hipMemcpy(graph + (size_t)q0 * K, d_graph_block,
                   (size_t)qrows * K * sizeof(uint32_t), hipMemcpyDeviceToHost) != hipSuccess) {
       fprintf(stderr, "[tiled] graph copy failed: %s\n", hipGetErrorString(hipGetLastError()));
       goto cleanup;
     }
+    if (g_time) g_t_gcopy += sk_now_ms() - _t0;
   }
 
   memdbg(13, "bf_loop_done");
   if (hipDeviceSynchronize() != hipSuccess) goto cleanup;
+  if (g_time) { g_t_total = sk_now_ms() - _t_fn; sk_time_report("bf_graph"); }
   *graph_out = graph;
   graph = NULL;
   rc = 0;
@@ -694,11 +976,18 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
       set_tensor(&base_t, pinned_base ? pinned_base : (void*)base, kDLCPU, 32, n, dim, bs);
     }
     memdbg(26, "import_src_ready");
+    double _ti0 = sk_now_ms();
     if (cuvsCagraIndexFromArgs(h->res, L2Expanded, &graph_t, &base_t, h->idx) != CUVS_SUCCESS) {
       fprintf(stderr, "[tiled] CAGRA import failed: %s\n", cuvsGetLastErrorText());
       if (d_index_graph) hipFree(d_index_graph);
       if (pinned_base) hipHostFree(pinned_base);
       free(half_base); free(compact_graph); free(graph); goto fail;
+    }
+    if (g_time) {
+      hipDeviceSynchronize();
+      g_t_import = sk_now_ms() - _ti0;
+      g_t_total += g_t_import;
+      sk_time_report("bf_total");
     }
     if (d_index_graph) { h->d_graph = d_index_graph; }
     if (pinned_base) { h->pinned_base = pinned_base; }
