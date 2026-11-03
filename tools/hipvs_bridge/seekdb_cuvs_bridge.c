@@ -327,12 +327,23 @@ __global__ static void dist_tile_kernel(const float* __restrict__ Q,
 }
 
 // ---------------- custom top-K selection (replaces rocPRIM sorts) ----------------
+__device__ static inline float tiled_key(const float* krow, int i, const float* norms,
+                                        long qid, long x0, long n, int add)
+{
+  if (!add) return krow[i];
+  long xid = x0 + (long)i;
+  if (qid >= n || xid >= n) return INFINITY;
+  return krow[i] + norms[qid] + norms[xid];
+}
+
 __global__ static void select_topk_kernel(const float* __restrict__ keys,
                                           const uint32_t* __restrict__ ids,
                                           int stride, int C, int K,
                                           long base_id, int out_stride,
                                           float* __restrict__ out_keys,
-                                          uint32_t* __restrict__ out_ids)
+                                          uint32_t* __restrict__ out_ids,
+                                          const float* __restrict__ norms,
+                                          long q0, long x0, long n, int add_norms)
 {
   const int row = blockIdx.x;
   const float* krow = keys + (size_t)row * stride;
@@ -346,7 +357,7 @@ __global__ static void select_topk_kernel(const float* __restrict__ keys,
 
   if (C <= K) {
     for (int i = tid; i < K; i += blockDim.x) {
-      float v = i < C ? krow[i] : INFINITY;
+      float v = i < C ? tiled_key(krow, i, norms, q0 + row, x0, n, add_norms) : INFINITY;
       uint32_t id = i < C ? (irow ? irow[i] : (uint32_t)(base_id + i)) : 0u;
       out_keys[(size_t)row * out_stride + i] = v;
       out_ids[(size_t)row * out_stride + i] = id;
@@ -357,13 +368,13 @@ __global__ static void select_topk_kernel(const float* __restrict__ keys,
   if (tid == 0) { s_prefix = 0u; s_rank = (uint32_t)K; }
   __syncthreads();
   uint32_t pmask = 0u;
-  for (int pass = 3; pass >= 0; --pass) {
+  for (int pass = 3; pass >= 1; --pass) {
     for (int i = tid; i < 8 * 256; i += blockDim.x) ((uint32_t*)hist)[i] = 0u;
     __syncthreads();
     uint32_t pm = pmask, pf = s_prefix;
     int shift = pass * 8;
     for (int i = tid; i < C; i += blockDim.x) {
-      uint32_t u = __float_as_uint(krow[i]);
+      uint32_t u = __float_as_uint(tiled_key(krow, i, norms, q0 + row, x0, n, add_norms));
       if ((u & pm) == pf) atomicAdd(&hist[warp][(u >> shift) & 0xFF], 1u);
     }
     __syncthreads();
@@ -393,17 +404,18 @@ __global__ static void select_topk_kernel(const float* __restrict__ keys,
   if (tid == 0) { cnt_less = 0u; cnt_eq = 0u; }
   __syncthreads();
   for (int i = tid; i < C; i += blockDim.x) {
-    uint32_t u = __float_as_uint(krow[i]);
+    float v = tiled_key(krow, i, norms, q0 + row, x0, n, add_norms);
+    uint32_t u = __float_as_uint(v);
     if (u < pref) {
       uint32_t p = atomicAdd(&cnt_less, 1u);
       if (p < need_less) {
-        sk[p] = krow[i];
+        sk[p] = v;
         si[p] = irow ? irow[i] : (uint32_t)(base_id + i);
       }
-    } else if (u == pref) {
+    } else if ((u >> 8) == (pref >> 8)) {
       uint32_t p = atomicAdd(&cnt_eq, 1u);
       if (p < need_eq) {
-        sk[need_less + p] = krow[i];
+        sk[need_less + p] = v;
         si[need_less + p] = irow ? irow[i] : (uint32_t)(base_id + i);
       }
     }
@@ -516,8 +528,6 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
           fprintf(stderr, "[tiled] sgemm failed q=%ld tile=%d status=%d\n", q0, tile, (int)hs);
           goto cleanup;
         }
-        finish_distance_tile<<<(unsigned int)((tile_elems + 255) / 256), 256>>>(
-            d_dist, d_norms, n, q0, x0, B, T);
       } else {
         dim3 gdim((unsigned int)((B + DT_BM - 1) / DT_BM), (unsigned int)(T / DT_BN));
         dist_tile_kernel<<<gdim, 256>>>(d_base, d_base, d_norms, d_dist,
@@ -528,14 +538,16 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
         goto cleanup;
       }
       select_topk_kernel<<<(unsigned int)B, 256>>>(
-          d_dist, nullptr, T, T, K, x0, cpr, cand_k + tile * K, cand_id + tile * K);
+          d_dist, nullptr, T, T, K, x0, cpr, cand_k + tile * K, cand_id + tile * K,
+          d_norms, q0, x0, n, use_blas ? 1 : 0);
       if (hipGetLastError() != hipSuccess) {
         fprintf(stderr, "[tiled] tile select failed: %s\n", hipGetErrorString(hipGetLastError()));
         goto cleanup;
       }
     }
     select_topk_kernel<<<(unsigned int)B, 256>>>(
-        cand_k, cand_id, cpr, cpr, K, 0, K, d_graph_k, d_graph_block);
+        cand_k, cand_id, cpr, cpr, K, 0, K, d_graph_k, d_graph_block,
+        d_norms, q0, 0, n, 0);
     if (hipGetLastError() != hipSuccess || hipDeviceSynchronize() != hipSuccess) {
       fprintf(stderr, "[tiled] final select failed: %s\n", hipGetErrorString(hipGetLastError()));
       goto cleanup;
