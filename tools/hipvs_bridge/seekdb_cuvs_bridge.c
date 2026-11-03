@@ -698,6 +698,12 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   uint32_t* cand_id = NULL;
   float* d_graph_k = NULL;
   uint32_t* d_graph_block = NULL;
+  uint32_t* stage = NULL;
+  hipStream_t s_copy = NULL;
+  hipEvent_t ev_copy = NULL;
+  int pending_copy = 0;
+  long pending_q0 = 0;
+  int pending_rows = 0;
   hipblasHandle_t blas = NULL;
   int use_blas = env_int("TILED_GEMM_BLAS", dim == 256 ? 1 : 0);
   uint32_t* graph = NULL;
@@ -763,6 +769,11 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   memdbg(12, "bf_gemm_ready");
   graph = (uint32_t*)malloc((size_t)n * K * sizeof(uint32_t));
   if (!graph) { fprintf(stderr, "[tiled] host graph allocation failed\n"); goto cleanup; }
+  if (hipHostMalloc((void**)&stage, (size_t)B * K * sizeof(uint32_t), 0) != hipSuccess ||
+      hipStreamCreateWithFlags(&s_copy, hipStreamNonBlocking) != hipSuccess ||
+      hipEventCreateWithFlags(&ev_copy, hipEventDisableTiming) != hipSuccess) {
+    fprintf(stderr, "[tiled] async copy setup failed\n"); goto cleanup;
+  }
 
   for (long q0 = 0; q0 < padded_n; q0 += B) {
     if (q0 >= n) continue;
@@ -812,6 +823,11 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
       if (g_time) { hipDeviceSynchronize(); g_t_tsel += sk_now_ms() - _t0; }
     }
     _t0 = sk_now_ms();
+    if (pending_copy) {
+      if (hipEventSynchronize(ev_copy) != hipSuccess) { fprintf(stderr, "[tiled] copy wait failed\n"); goto cleanup; }
+      memcpy(graph + (size_t)pending_q0 * K, stage, (size_t)pending_rows * K * sizeof(uint32_t));
+      pending_copy = 0;
+    }
     select_topk_kernel<<<(unsigned int)B, 256>>>(
         cand_k, cand_id, cpr, cpr, K, 0, K, d_graph_k, d_graph_block);
     if (hipGetLastError() != hipSuccess || hipDeviceSynchronize() != hipSuccess) {
@@ -820,14 +836,21 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     }
     if (g_time) g_t_fsel += sk_now_ms() - _t0;
     _t0 = sk_now_ms();
-    if (hipMemcpy(graph + (size_t)q0 * K, d_graph_block,
-                  (size_t)qrows * K * sizeof(uint32_t), hipMemcpyDeviceToHost) != hipSuccess) {
-      fprintf(stderr, "[tiled] graph copy failed: %s\n", hipGetErrorString(hipGetLastError()));
+    if (hipMemcpyAsync(stage, d_graph_block,
+                       (size_t)qrows * K * sizeof(uint32_t), hipMemcpyDeviceToHost, s_copy) != hipSuccess ||
+        hipEventRecord(ev_copy, s_copy) != hipSuccess) {
+      fprintf(stderr, "[tiled] graph async copy failed: %s\n", hipGetErrorString(hipGetLastError()));
       goto cleanup;
     }
+    pending_copy = 1; pending_q0 = q0; pending_rows = qrows;
     if (g_time) g_t_gcopy += sk_now_ms() - _t0;
   }
 
+  if (pending_copy) {
+    if (hipEventSynchronize(ev_copy) != hipSuccess) { fprintf(stderr, "[tiled] final copy wait failed\n"); goto cleanup; }
+    memcpy(graph + (size_t)pending_q0 * K, stage, (size_t)pending_rows * K * sizeof(uint32_t));
+    pending_copy = 0;
+  }
   memdbg(13, "bf_loop_done");
   if (hipDeviceSynchronize() != hipSuccess) goto cleanup;
   if (g_time) { g_t_total = sk_now_ms() - _t_fn; sk_time_report("bf_graph"); }
@@ -839,6 +862,9 @@ cleanup:
   memdbg(14, "bf_cleanup");
   if (blas) hipblasDestroy(blas);
   if (d_graph_block) hipFree(d_graph_block);
+  if (stage) hipHostFree(stage);
+  if (ev_copy) hipEventDestroy(ev_copy);
+  if (s_copy) hipStreamDestroy(s_copy);
   if (d_graph_k) hipFree(d_graph_k);
   if (cand_id) hipFree(cand_id);
   if (cand_k) hipFree(cand_k);
