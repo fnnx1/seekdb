@@ -517,10 +517,11 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     int qrows = (int)((n - q0) < B ? (n - q0) : B);
     for (int tile = 0; tile < ntiles; ++tile) {
       long x0 = (long)tile * T;
+      int cols = (x0 + T <= n) ? T : (int)(n - x0);
       if (use_blas) {
         const float alpha = -2.0f, beta = 0.0f;
         hipblasStatus_t hs = hipblasSgemm(blas, HIPBLAS_OP_T, HIPBLAS_OP_N,
-            T, B, (int)dim, &alpha,
+            cols, B, (int)dim, &alpha,
             d_base + (size_t)x0 * dim, (int)dim,
             d_base + (size_t)q0 * dim, (int)dim,
             &beta, d_dist, T);
@@ -538,7 +539,7 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
         goto cleanup;
       }
       select_topk_kernel<<<(unsigned int)B, 256>>>(
-          d_dist, nullptr, T, T, K, x0, cpr, cand_k + tile * K, cand_id + tile * K,
+          d_dist, nullptr, T, use_blas ? cols : T, K, x0, cpr, cand_k + tile * K, cand_id + tile * K,
           d_norms, q0, x0, n, use_blas ? 1 : 0);
       if (hipGetLastError() != hipSuccess) {
         fprintf(stderr, "[tiled] tile select failed: %s\n", hipGetErrorString(hipGetLastError()));
