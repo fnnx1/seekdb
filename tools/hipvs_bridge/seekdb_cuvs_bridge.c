@@ -912,8 +912,8 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   h->host_graph = NULL;
   h->graph_k = 0;
   h->index_k = 0;
-  int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 100);
-  int expand_seeds = env_int("TILED_EXPAND_SEEDS", h->dim == 128 ? 0 : 80);
+  int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 256);
+  int expand_seeds = env_int("TILED_EXPAND_SEEDS", 0);
   if (rerank_l > 0 || expand_seeds > 0) {
     size_t base_bytes = (size_t)n * (size_t)dim * sizeof(float);
     h->host_base = (float*)malloc(base_bytes);
@@ -1059,9 +1059,9 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   if (!h || !query || !out_ids || nq <= 0 || topk <= 0) return 1;
   int rc = 0;
   long search_k = topk;
-  int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 100);
-  int expand_seeds = env_int("TILED_EXPAND_SEEDS", h->dim == 128 ? 0 : 80);
-  int second_hop = env_int("TILED_SECOND_HOP", h->dim == 128 ? 0 : 40);
+  int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 256);
+  int expand_seeds = env_int("TILED_EXPAND_SEEDS", 0);
+  int second_hop = env_int("TILED_SECOND_HOP", 0);
   int expand_deg = env_int("TILED_EXPAND_DEGREE", 0);
   if (expand_deg <= 0 || expand_deg > h->graph_k) expand_deg = (int)h->graph_k;
   int do_refine = h->host_base && (rerank_l > topk || expand_seeds > 0);
