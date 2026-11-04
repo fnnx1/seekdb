@@ -78,6 +78,9 @@ comes from the eval data set, not from this proxy set.
   still worth its cost.
 * A per-chunk synchronous D2H costs ~2.3 ms/chunk of queue drain (build 9.0 s
   instead of 5.5 s); the dual-stream pipeline is required.
+* Chunk size vs build-phase VRAM peak (measured): 256 -> 0.694 GB / 5.5 s,
+  320 -> 0.757 GB / 5.41 s, 384 -> 0.822 GB / 5.38 s.  256 is the default for
+  headroom under the 0.8 GB budget; 320 is the fastest still-compliant value.
 
 ## Risks
 
