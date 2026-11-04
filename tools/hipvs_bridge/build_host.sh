@@ -13,7 +13,6 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 HIPVS_ROOT=${HIPVS_ROOT:-/opt/hipvs}
 ROCM_ROOT=${ROCM_ROOT:-/opt/rocm}
-HOSTCXX=${HOSTCXX:-$ROCM_ROOT/lib/llvm/bin/clang++}
 OUTPUT=${1:-$SCRIPT_DIR/libseekdb_cuvs_bridge.so}
 SRC=${SRC:-$SCRIPT_DIR/seekdb_cuvs_bridge_host.c}
 
@@ -26,17 +25,35 @@ SRC=${SRC:-$SCRIPT_DIR/seekdb_cuvs_bridge_host.c}
   exit 2
 }
 
-# Plain host compiler first; fall back to hipcc forced into C++ mode (hipcc
-# would otherwise add `-x hip --offload-arch=<gfx>` on its own).
+# Locate a plain host C++ compiler.  hipcc on ROCm 7.x injects
+# `-x hip --offload-arch=<gfx>` by itself, so it is only the last resort and is
+# then forced into C++ mode.
 EXTRA_FLAGS=()
-if [[ -x "$HOSTCXX" ]]; then
-  :
-elif [[ -x "$ROCM_ROOT/bin/hipcc" ]]; then
-  HOSTCXX="$ROCM_ROOT/bin/hipcc"
-  EXTRA_FLAGS+=(-x c++)
-else
-  echo "no host C++ compiler found (HOSTCXX=$HOSTCXX)" >&2
-  exit 2
+pick_cxx() {
+  local c
+  if [[ -n "${HOSTCXX:-}" ]]; then
+    [[ -x "$HOSTCXX" ]] && { echo "$HOSTCXX"; return 0; }
+    echo "HOSTCXX is set but not executable: $HOSTCXX" >&2
+  fi
+  for c in \
+    "$ROCM_ROOT/lib/llvm/bin/clang++" \
+    /opt/rocm/lib/llvm/bin/clang++ \
+    /opt/rocm-*/lib/llvm/bin/clang++ \
+    "$(command -v clang++ 2>/dev/null || true)" \
+    "$(command -v g++ 2>/dev/null || true)"; do
+    if [[ -n "$c" && -x "$c" ]]; then echo "$c"; return 0; fi
+  done
+  return 1
+}
+if ! HOSTCXX=$(pick_cxx); then
+  if [[ -x "$ROCM_ROOT/bin/hipcc" ]]; then
+    HOSTCXX="$ROCM_ROOT/bin/hipcc"
+    EXTRA_FLAGS+=(-x c++)
+    echo "no host clang++ found; falling back to hipcc -x c++" >&2
+  else
+    echo "no host C++ compiler found" >&2
+    exit 2
+  fi
 fi
 echo "host-only build with $HOSTCXX"
 
@@ -62,5 +79,14 @@ mkdir -p "$(dirname "$OUTPUT")"
   -lcuvs \
   -lamdhip64 \
   -o "$OUTPUT"
+
+# Hard guarantee: no device code object may end up in the bridge.
+if command -v roc-obj-ls >/dev/null 2>&1; then
+  if roc-obj-ls "$OUTPUT" 2>&1 | grep -qiE 'gfx[0-9]|amdgcn'; then
+    echo "ERROR: device code object found in $OUTPUT" >&2
+    roc-obj-ls "$OUTPUT" >&2 || true
+    exit 3
+  fi
+fi
 
 echo "built $OUTPUT (host-only)"
