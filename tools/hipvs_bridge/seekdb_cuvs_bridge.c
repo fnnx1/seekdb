@@ -1,7 +1,6 @@
 /* seekdb bridge: exact brute-force kNN graph -> CAGRA index (C API only). */
 #include "seekdb_cuvs_bridge.h"
 #include <cuvs/core/c_api.h>
-#include <cuvs/neighbors/brute_force.h>
 #include <cuvs/neighbors/cagra.h>
 #include <cuvs/distance/distance.h>
 #include <dlpack/dlpack.h>
@@ -14,7 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <hipblas/hipblas.h>
-#include <rocprim/rocprim.hpp>
 #include <limits.h>
 #include <stdint.h>
 #include <algorithm>
@@ -228,128 +226,7 @@ __global__ static void row_norm_kernel(const float* x, float* norms, long n, lon
   if (t == 0) norms[row] = smem[0];
 }
 
-__global__ static void finish_distance_tile(float* d,
-                                             const float* norms,
-                                             long n, long q0, long x0,
-                                             int B, int T)
-{
-  size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-  size_t count = (size_t)B * T;
-  if (i >= count) return;
-  long qr = (long)(i / T);
-  long xc = (long)(i % T);
-  long qid = q0 + qr;
-  long xid = x0 + xc;
-  if (qid >= n || xid >= n) { d[i] = INFINITY; return; }
-  d[i] += norms[qid] + norms[xid];
-}
-
-__global__ static void gather_tile_topk(const float* sorted_keys,
-                                         const uint16_t* sorted_ids,
-                                         float* candidates,
-                                         uint32_t* candidate_ids,
-                                         int B, int T, int K, int tile_no,
-                                         int ntiles, int tile_count)
-{
-  int q = blockIdx.x * blockDim.x + threadIdx.x;
-  if (q >= B) return;
-  int m = tile_count < K ? tile_count : K;
-  size_t src = (size_t)q * T;
-  size_t dst = ((size_t)q * ntiles + tile_no) * K;
-  for (int j = 0; j < m; ++j) {
-    candidates[dst + j] = sorted_keys[src + j];
-    uint16_t local = sorted_ids[src + j];
-    candidate_ids[dst + j] = local == UINT16_MAX ? UINT_MAX : (uint32_t)(tile_no * T + local);
-  }
-  for (int j = m; j < K; ++j) {
-    candidates[dst + j] = INFINITY;
-    candidate_ids[dst + j] = UINT_MAX;
-  }
-}
-
-__global__ static void gather_final_topk(const uint32_t* sorted_ids,
-                                          uint32_t* graph_block,
-                                          int B, int K, int out_k,
-                                          int candidates_per_row)
-{
-  int q = blockIdx.x * blockDim.x + threadIdx.x;
-  if (q >= B) return;
-  size_t src = (size_t)q * candidates_per_row;
-  size_t dst = (size_t)q * out_k;
-  for (int j = 0; j < out_k; ++j) {
-    uint32_t id = sorted_ids[src + j];
-    graph_block[dst + j] = id == UINT_MAX ? 0u : id;
-  }
-}
-
 static int gcd_int(int a, int b) { while (b) { int t = a % b; a = b; b = t; } return a; }
-
-// ---------------- custom FP32 distance-tile GEMM (replaces hipBLAS SGEMM) ----------------
-#define DT_BM 64
-#define DT_BN 64
-#define DT_BK 16
-__global__ static void dist_tile_kernel(const float* __restrict__ Q,
-                                        const float* __restrict__ X,
-                                        const float* __restrict__ norms,
-                                        float* __restrict__ D,
-                                        int dim, long q0, long x0,
-                                        int B, int T, long n)
-{
-  __shared__ float Qs[DT_BM][DT_BK + 1];
-  __shared__ float Xs[DT_BN][DT_BK + 1];
-  const int tx = threadIdx.x & 15;
-  const int ty = threadIdx.x >> 4;
-  const int b0 = blockIdx.x * DT_BM;
-  const int t0 = blockIdx.y * DT_BN;
-  const int ldr = threadIdx.x >> 2;
-  const int ldc = (threadIdx.x & 3) * 4;
-  float acc[4][4];
-  #pragma unroll
-  for (int i = 0; i < 4; ++i)
-    #pragma unroll
-    for (int j = 0; j < 4; ++j) acc[i][j] = 0.0f;
-
-  for (int k0 = 0; k0 < dim; k0 += DT_BK) {
-    const float* qsrc = Q + (size_t)(q0 + b0 + ldr) * dim + k0 + ldc;
-    float4 qv = *(const float4*)qsrc;
-    Qs[ldr][ldc + 0] = qv.x; Qs[ldr][ldc + 1] = qv.y;
-    Qs[ldr][ldc + 2] = qv.z; Qs[ldr][ldc + 3] = qv.w;
-    const float* xsrc = X + (size_t)(x0 + t0 + ldr) * dim + k0 + ldc;
-    float4 xv = *(const float4*)xsrc;
-    Xs[ldr][ldc + 0] = xv.x; Xs[ldr][ldc + 1] = xv.y;
-    Xs[ldr][ldc + 2] = xv.z; Xs[ldr][ldc + 3] = xv.w;
-    __syncthreads();
-    #pragma unroll
-    for (int k = 0; k < DT_BK; ++k) {
-      float a0 = Qs[tx * 4 + 0][k], a1 = Qs[tx * 4 + 1][k];
-      float a2 = Qs[tx * 4 + 2][k], a3 = Qs[tx * 4 + 3][k];
-      float c0 = Xs[ty * 4 + 0][k], c1 = Xs[ty * 4 + 1][k];
-      float c2 = Xs[ty * 4 + 2][k], c3 = Xs[ty * 4 + 3][k];
-      acc[0][0] = fmaf(a0, c0, acc[0][0]); acc[0][1] = fmaf(a0, c1, acc[0][1]);
-      acc[0][2] = fmaf(a0, c2, acc[0][2]); acc[0][3] = fmaf(a0, c3, acc[0][3]);
-      acc[1][0] = fmaf(a1, c0, acc[1][0]); acc[1][1] = fmaf(a1, c1, acc[1][1]);
-      acc[1][2] = fmaf(a1, c2, acc[1][2]); acc[1][3] = fmaf(a1, c3, acc[1][3]);
-      acc[2][0] = fmaf(a2, c0, acc[2][0]); acc[2][1] = fmaf(a2, c1, acc[2][1]);
-      acc[2][2] = fmaf(a2, c2, acc[2][2]); acc[2][3] = fmaf(a2, c3, acc[2][3]);
-      acc[3][0] = fmaf(a3, c0, acc[3][0]); acc[3][1] = fmaf(a3, c1, acc[3][1]);
-      acc[3][2] = fmaf(a3, c2, acc[3][2]); acc[3][3] = fmaf(a3, c3, acc[3][3]);
-    }
-    __syncthreads();
-  }
-  #pragma unroll
-  for (int i = 0; i < 4; ++i) {
-    const int qi = b0 + tx * 4 + i;
-    const long qid = q0 + qi;
-    const float nq = norms[qid];
-    float* drow = D + (size_t)qi * T + t0 + ty * 4;
-    #pragma unroll
-    for (int j = 0; j < 4; ++j) {
-      const long xid = x0 + t0 + ty * 4 + j;
-      float v = fmaf(-2.0f, acc[i][j], nq + norms[xid]);
-      drow[j] = (qid >= n || xid >= n) ? INFINITY : v;
-    }
-  }
-}
 
 // ---------------- custom top-K selection (replaces rocPRIM sorts) ----------------
 __global__ static void select_topk_kernel(const float* __restrict__ keys,
@@ -458,7 +335,7 @@ __global__ static void select_topk_kernel(const float* __restrict__ keys,
 }
 
 /* ---------------- fused finish + exact top-K tile select ----------------
- * The per-column norm correction of finish_distance_tile is folded into the
+ * The per-column norm correction of the distance tile is folded into the
  * key computation (key = dot + (nq + nx), bit-identical arithmetic), removing
  * one full read+write of the tile.  Selection is a 3-pass scheme: two
  * narrowing passes over the row (11 + 11 high bits) resolve a 22-bit prefix,
@@ -505,18 +382,19 @@ __device__ static void stk_pick(uint32_t* hist, uint32_t* part, int nb, int shif
   __syncthreads();
 }
 
-/* body sees i (int), v (float key), u (uint32 bits of v) */
+/* body sees i (int), v (float key), u (uint32 bits of v); keys are the raw
+ * GEMM dots corrected by the fused row norms (dot + nq + nx). */
 #define STK_FOR_EACH(BODY)                                                              \
   {                                                                                     \
     const int _vend = Cv & ~3;                                                          \
     int _i = tid * 4;                                                                   \
     for (; _i < _vend; _i += STK_NT * 4) {                                              \
       float4 _d = *(const float4*)(drow + _i);                                          \
-      float4 _n = RAW ? *(const float4*)(nx + _i) : make_float4(0.f, 0.f, 0.f, 0.f);     \
-      float _k0 = RAW ? (_d.x + (nq + _n.x)) : _d.x;                                     \
-      float _k1 = RAW ? (_d.y + (nq + _n.y)) : _d.y;                                     \
-      float _k2 = RAW ? (_d.z + (nq + _n.z)) : _d.z;                                     \
-      float _k3 = RAW ? (_d.w + (nq + _n.w)) : _d.w;                                     \
+      float4 _n = *(const float4*)(nx + _i);                                            \
+      float _k0 = _d.x + (nq + _n.x);                                                   \
+      float _k1 = _d.y + (nq + _n.y);                                                   \
+      float _k2 = _d.z + (nq + _n.z);                                                   \
+      float _k3 = _d.w + (nq + _n.w);                                                   \
       { const int i = _i; const float v = _k0; const uint32_t u = __float_as_uint(v); BODY } \
       { const int i = _i + 1; const float v = _k1; const uint32_t u = __float_as_uint(v); BODY } \
       { const int i = _i + 2; const float v = _k2; const uint32_t u = __float_as_uint(v); BODY } \
@@ -524,13 +402,12 @@ __device__ static void stk_pick(uint32_t* hist, uint32_t* part, int nb, int shif
     }                                                                                   \
     for (int _j = _vend + tid; _j < Cv; _j += STK_NT) {                                  \
       const int i = _j;                                                                  \
-      const float v = RAW ? (drow[_j] + (nq + nx[_j])) : drow[_j];                        \
+      const float v = drow[_j] + (nq + nx[_j]);                                         \
       const uint32_t u = __float_as_uint(v);                                             \
       BODY                                                                              \
     }                                                                                   \
   }
 
-template <bool RAW>
 __global__ static void select_tile_fused_kernel(const float* __restrict__ dots,
                                                 const float* __restrict__ norms,
                                                 long x0, int Cv, int stride,
@@ -543,7 +420,7 @@ __global__ static void select_tile_fused_kernel(const float* __restrict__ dots,
   const int tid = threadIdx.x;
   const float* drow = dots + (size_t)row * stride;
   const float* nx = norms + x0;
-  const float nq = RAW ? norms[q0 + row] : 0.0f;
+  const float nq = norms[q0 + row];
 
   __shared__ uint32_t hist[STK_HB];
   __shared__ uint32_t part[STK_NT];
@@ -561,7 +438,7 @@ __global__ static void select_tile_fused_kernel(const float* __restrict__ dots,
       float v = INFINITY;
       uint32_t id = 0u;
       if (i < Cv) {
-        v = RAW ? (drow[i] + (nq + nx[i])) : drow[i];
+        v = drow[i] + (nq + nx[i]);
         id = (uint32_t)(x0 + i);
       }
       ok[i] = v;
@@ -705,7 +582,6 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   long pending_q0 = 0;
   int pending_rows = 0;
   hipblasHandle_t blas = NULL;
-  int use_blas = env_int("TILED_GEMM_BLAS", dim == 256 ? 1 : 0);
   uint32_t* graph = NULL;
   long lcm = (long)B * (long)T / gcd_int(B, T);
   long padded_n = ((n + lcm - 1) / lcm) * lcm;
@@ -720,8 +596,6 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   g_t_copyin = g_t_gemm = g_t_fin = g_t_tsel = g_t_fsel = g_t_gcopy = 0;
   g_n_gemm = 0;
   _t_fn = sk_now_ms();
-  int time_skip_gemm = env_int("TILED_TIME_SKIP_GEMM", 0);
-  int time_skip_sel = env_int("TILED_TIME_SKIP_SEL", 0);
   if (n <= 0 || dim <= 0 || K <= 0 || K > 256 || (K & (K - 1)) != 0 || B <= 0 || T <= 0 ||
       padded_n > INT_MAX || tile_elems > UINT_MAX || candidate_elems > UINT_MAX) return 1;
   if (hipMalloc((void**)&d_base, (size_t)padded_n * dim * sizeof(float)) != hipSuccess ||
@@ -758,14 +632,14 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     goto cleanup;
   }
   if (g_time) g_t_copyin = sk_now_ms() - _t0;
-  if (use_blas) {
-    if (hipblasCreate(&blas) != HIPBLAS_STATUS_SUCCESS) {
-      fprintf(stderr, "[tiled] hipblas setup failed\n");
-      goto cleanup;
-    }
-    hipblasSetPointerMode(blas, HIPBLAS_POINTER_MODE_HOST);
-    hipblasSetStream(blas, 0);
+  /* hipBLAS SGEMM is the only distance-tile path: it is used for both the
+     dim256 (B=768/T=28672) and dim128 (B=1024/T=8192) tiles. */
+  if (hipblasCreate(&blas) != HIPBLAS_STATUS_SUCCESS) {
+    fprintf(stderr, "[tiled] hipblas setup failed\n");
+    goto cleanup;
   }
+  hipblasSetPointerMode(blas, HIPBLAS_POINTER_MODE_HOST);
+  hipblasSetStream(blas, 0);
   memdbg(12, "bf_gemm_ready");
   graph = (uint32_t*)malloc((size_t)n * K * sizeof(uint32_t));
   if (!graph) { fprintf(stderr, "[tiled] host graph allocation failed\n"); goto cleanup; }
@@ -781,7 +655,7 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     for (int tile = 0; tile < ntiles; ++tile) {
       long x0 = (long)tile * T;
       _t0 = sk_now_ms();
-      if (use_blas) {
+      {
         const float alpha = -2.0f, beta = 0.0f;
         hipblasStatus_t hs = hipblasSgemm(blas, HIPBLAS_OP_T, HIPBLAS_OP_N,
             T, B, (int)dim, &alpha,
@@ -793,10 +667,6 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
           goto cleanup;
         }
         if (g_time) { hipDeviceSynchronize(); g_t_gemm += sk_now_ms() - _t0; g_n_gemm++; _t0 = sk_now_ms(); }
-      } else {
-        dim3 gdim((unsigned int)((B + DT_BM - 1) / DT_BM), (unsigned int)(T / DT_BN));
-        dist_tile_kernel<<<gdim, 256>>>(d_base, d_base, d_norms, d_dist,
-                                        (int)dim, q0, x0, B, T, n);
       }
       if (hipGetLastError() != hipSuccess) {
         fprintf(stderr, "[tiled] distance kernel failed: %s\n", hipGetErrorString(hipGetLastError()));
@@ -807,14 +677,9 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
       {
         int cv = (n - x0) < (long)T ? (int)(n - x0) : T;
         if (cv < 0) cv = 0;
-        if (use_blas)
-          select_tile_fused_kernel<true><<<(unsigned int)B, STK_NT>>>(
-              d_dist, d_norms, x0, cv, T, K, q0,
-              cand_k + tile * K, cand_id + tile * K, cpr);
-        else
-          select_tile_fused_kernel<false><<<(unsigned int)B, STK_NT>>>(
-              d_dist, d_norms, x0, cv, T, K, q0,
-              cand_k + tile * K, cand_id + tile * K, cpr);
+        select_tile_fused_kernel<<<(unsigned int)B, STK_NT>>>(
+            d_dist, d_norms, x0, cv, T, K, q0,
+            cand_k + tile * K, cand_id + tile * K, cpr);
       }
       if (hipGetLastError() != hipSuccess) {
         fprintf(stderr, "[tiled] tile select failed: %s\n", hipGetErrorString(hipGetLastError()));
