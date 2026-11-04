@@ -1369,7 +1369,10 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   }
   int rc = 0;
   long search_k = topk;
-  int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 256);
+  /* Direction step 1: isolate host rerank.  Default off; the CAGRA top-k is
+     already the exact-graph top-k on this workload (R@10/R@100 unchanged).
+     TILED_RERANK_L can still re-enable the old 256-candidate refine. */
+  int rerank_l = env_int("TILED_RERANK_L", 0);
   int expand_seeds = env_int("TILED_EXPAND_SEEDS", 0);
   int second_hop = env_int("TILED_SECOND_HOP", 0);
   int expand_deg = env_int("TILED_EXPAND_DEGREE", 0);
