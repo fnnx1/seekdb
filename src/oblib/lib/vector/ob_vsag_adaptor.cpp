@@ -53,6 +53,7 @@ extern "C" void *seekdb_cuvs_build(const float *base, long n, long dim);
 extern "C" int   seekdb_cuvs_search(void *handle, const float *query, long nq, long topk,
                                     unsigned int *out_ids, float *out_dist);
 extern "C" void  seekdb_cuvs_free(void *handle);
+extern "C" int seekdb_cuvs_set_base(void *handle, const float *base, long n, long dim);
 extern "C" int seekdb_cuvs_serialize(void *handle, const char *filename);
 extern "C" void *seekdb_cuvs_deserialize(const char *filename, long n, long dim);
 #else
@@ -63,6 +64,7 @@ static int   seekdb_cuvs_cagra_knn(const float *, long, long, const float *, lon
 static void *seekdb_cuvs_build(const float *, long, long) { return nullptr; }
 static int   seekdb_cuvs_search(void *, const float *, long, long, unsigned int *, float *) { return -1; }
 static void  seekdb_cuvs_free(void *) {}
+static int seekdb_cuvs_set_base(void *, const float *, long, long) { return -1; }
 static int seekdb_cuvs_serialize(void *, const char *) { return -1; }
 static void *seekdb_cuvs_deserialize(const char *, long, long) { return nullptr; }
 #endif
@@ -493,6 +495,15 @@ static int ob_cuvs_deserialize(void *key, int expected_dim, std::istream &in) {
         return ret;
       }
       ent->bridge_ = ob_cuvs_wrap(job.handle_);
+      if (ent->bridge_ == nullptr ||
+          seekdb_cuvs_set_base(ent->bridge_.get(), ent->buf_vecs_.data(),
+                               static_cast<long>(n), static_cast<long>(dim32)) != 0) {
+        delete ent;
+        ret = OB_ERR_VSAG_RETURN_ERROR;
+        LOG_WARN("[OBVSAG][cuVS] failed to attach snapshot base to CAGRA index",
+                 K(ret), KP(key), K(n64), K(dim32));
+        return ret;
+      }
       ent->built_n_ = n;
       ent->ids_ = ent->buf_ids_;
       {
