@@ -356,7 +356,10 @@ static bool ob_cuvs_try_search(void *key, vsag::Allocator *alloc,
   std::vector<unsigned> off(topk);
   std::vector<float> dst(topk);
   ObCuvsJob job{ent, query, topk, static_cast<int>(ent->dim_), n, need_build, &off, &dst, -1, false};
-  if (!ob_cuvs_worker_run(ob_cuvs_search_fn, &job)) {
+  // The long-lived worker is only used for the large hidden index.  Restored
+  // small-n indexes hit a cuVS thread-affinity crash when searched from the
+  // worker; route n < 64K through the old per-call 32MB pthread path.
+  if (n < 65536 || !ob_cuvs_worker_run(ob_cuvs_search_fn, &job)) {
     pthread_t tid; pthread_attr_t attr; pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, 32UL * 1024 * 1024);
     if (pthread_create(&tid, &attr, ob_cuvs_job, &job) == 0) { pthread_join(tid, nullptr); }
