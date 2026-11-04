@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <hipblas/hipblas.h>
+#include <hip/hip_fp16.h>
+#include <rocwmma/rocwmma.hpp>
 #include <rocprim/rocprim.hpp>
 #include <limits.h>
 #include <stdint.h>
@@ -234,6 +236,12 @@ static void set_tensor(DLManagedTensor* t, void* data, DLDeviceType dev, int bit
 }
 
 __global__ static void fill_pad_kernel(float* x, long start, long count, float v)
+{
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < count) x[start + i] = v;
+}
+
+__global__ static void fill_pad_half_kernel(half* x, long start, long count, half v)
 {
   long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
   if (i < count) x[start + i] = v;
@@ -840,11 +848,63 @@ static int sk_finish_graph_copy(uint32_t* graph, long K, uint32_t* stage,
   return 0;
 }
 
+
+__global__ static void base_f2h_kernel(const float* __restrict__ src, half* __restrict__ dst, long count)
+{
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < count) dst[i] = __float2half(src[i]);
+}
+
+__global__ static void row_norm_half_kernel(const half* __restrict__ x, float* norms, long n, long dim)
+{
+  long row = (long)blockIdx.x;
+  int t = threadIdx.x;
+  __shared__ float smem[256];
+  float v = 0.0f;
+  for (long j = t; j < dim; j += blockDim.x) {
+    float a = __half2float(x[row * dim + j]);
+    v = fmaf(a, a, v);
+  }
+  smem[t] = v; __syncthreads();
+  for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+    if (t < stride) smem[t] += smem[t + stride];
+    __syncthreads();
+  }
+  if (t == 0) norms[row] = smem[0];
+}
+
+__global__ static void dist_wmma_kernel(const half* __restrict__ A,
+                                        const half* __restrict__ X,
+                                        float* __restrict__ C,
+                                        int B, int T, int K,
+                                        long x0, long q0, int n, int ldc)
+{
+  int warp = threadIdx.x >> 5;
+  int wm = warp >> 2, wn = warp & 3;
+  int row0 = blockIdx.x * 64 + wm * 16;
+  int col0 = blockIdx.y * 64 + wn * 16;
+  if (row0 >= B || col0 >= T) return;
+  rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float> acc;
+  rocwmma::fill_fragment(acc, 0.0f);
+  for (int k = 0; k < K; k += 16) {
+    rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, half, rocwmma::row_major> a;
+    rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, half, rocwmma::col_major> b;
+    rocwmma::load_matrix_sync(a, A + (size_t)(q0 + row0) * K + k, K);
+    rocwmma::load_matrix_sync(b, X + (size_t)(x0 + col0) * K + k, K);
+    rocwmma::mma_sync(acc, a, b, acc);
+  }
+  for (int i = 0; i < acc.num_elements; ++i) acc.x[i] *= -2.0f;
+  rocwmma::store_matrix_sync(C + (size_t)row0 * ldc + col0, acc, ldc,
+                             rocwmma::mem_row_major);
+}
+
 static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
                                    int B, int T, uint32_t** graph_out)
 {
   int rc = 1;
   float* d_base = NULL;
+  half* d_base_h = NULL;
+  unsigned short* hbase_half = NULL;
   float* d_norms = NULL;
   float* d_dist = NULL;
   float* cand_k = NULL;
@@ -864,6 +924,7 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   int ev_ready = 0;
   hipblasHandle_t blas = NULL;
   int use_blas = env_int("TILED_GEMM_BLAS", dim == 256 ? 1 : 0);
+  int use_wmma = (dim == 256) && env_int("TILED_WMMA", 1);
   uint32_t* graph = NULL;
   long lcm = (long)B * (long)T / gcd_int(B, T);
   long padded_n = ((n + lcm - 1) / lcm) * lcm;
@@ -887,7 +948,8 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   _t_fn = sk_now_ms();
   if (n <= 0 || dim <= 0 || K <= 0 || K > 256 || (K & (K - 1)) != 0 || B <= 0 || T <= 0 ||
       padded_n > INT_MAX || tile_elems > UINT_MAX || candidate_elems > UINT_MAX) return 1;
-  if (hipMalloc((void**)&d_base, (size_t)padded_n * dim * sizeof(float)) != hipSuccess ||
+  if ((!use_wmma && hipMalloc((void**)&d_base, (size_t)padded_n * dim * sizeof(float)) != hipSuccess) ||
+      (use_wmma && hipMalloc((void**)&d_base_h, (size_t)padded_n * dim * sizeof(half)) != hipSuccess) ||
       hipMalloc((void**)&d_norms, (size_t)padded_n * sizeof(float)) != hipSuccess ||
       hipMalloc((void**)&d_dist, tile_elems * sizeof(float)) != hipSuccess ||
       hipMalloc((void**)&cand_k, candidate_elems * sizeof(float)) != hipSuccess ||
@@ -909,15 +971,33 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   }
   ev_ready = 1;
   _t0 = sk_now_ms();
-  if (hipMemcpy(d_base, base, (size_t)n * dim * sizeof(float), hipMemcpyHostToDevice) != hipSuccess) {
-    fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
-    goto cleanup;
-  }
-  {
+  if (!use_wmma) {
+    if (hipMemcpy(d_base, base, (size_t)n * dim * sizeof(float), hipMemcpyHostToDevice) != hipSuccess) {
+      fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
+      goto cleanup;
+    }
     long pad_elems = (padded_n - n) * dim;
     if (pad_elems > 0) {
       fill_pad_kernel<<<(unsigned int)((pad_elems + 255) / 256), 256>>>(
           d_base, (long)n * dim, pad_elems, 1.0e6f);
+    }
+  } else {
+    long total = (long)n * dim;
+    size_t CH = 1u << 20;
+    half* hstage = (half*)malloc(CH * sizeof(half));
+    if (!hstage) { fprintf(stderr, "[tiled] half stage failed\n"); goto cleanup; }
+    for (long off = 0; off < total; off += (long)CH) {
+      long m = (total - off) < (long)CH ? (total - off) : (long)CH;
+      for (long i = 0; i < m; ++i) hstage[i] = __float2half(base[off + i]);
+      if (hipMemcpy(d_base_h + off, hstage, (size_t)m * sizeof(half), hipMemcpyHostToDevice) != hipSuccess) {
+        free(hstage); goto cleanup;
+      }
+    }
+    free(hstage);
+    long pad_elems = (padded_n - n) * dim;
+    if (pad_elems > 0) {
+      fill_pad_half_kernel<<<(unsigned int)((pad_elems + 255) / 256), 256>>>(
+          d_base_h, (long)n * dim, pad_elems, __float2half(60000.0f));
     }
   }
   if (hipGetLastError() != hipSuccess ||
@@ -925,13 +1005,16 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
     goto cleanup;
   }
-  row_norm_kernel<<<(unsigned int)padded_n, 256>>>(d_base, d_norms, padded_n, dim);
+  if (use_wmma)
+    row_norm_half_kernel<<<(unsigned int)padded_n, 256>>>(d_base_h, d_norms, padded_n, dim);
+  else
+    row_norm_kernel<<<(unsigned int)padded_n, 256>>>(d_base, d_norms, padded_n, dim);
   if (hipGetLastError() != hipSuccess || hipDeviceSynchronize() != hipSuccess) {
     fprintf(stderr, "[tiled] norm kernel failed: %s\n", hipGetErrorString(hipGetLastError()));
     goto cleanup;
   }
   if (g_time) g_t_copyin = sk_now_ms() - _t0;
-  if (use_blas) {
+  if (use_blas && !use_wmma) {
     if (hipblasCreate(&blas) != HIPBLAS_STATUS_SUCCESS) {
       fprintf(stderr, "[tiled] hipblas setup failed\n");
       goto cleanup;
@@ -953,7 +1036,11 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
     for (int tile = 0; tile < ntiles; ++tile) {
       long x0 = (long)tile * T;
       _t0 = sk_now_ms();
-      if (use_blas) {
+      if (use_wmma) {
+        dim3 gw((unsigned int)((B + 63) / 64), (unsigned int)((T + 63) / 64));
+        dist_wmma_kernel<<<gw, 512, 0, s_work>>>(d_base_h, d_base_h, d_dist,
+                                                 B, T, (int)dim, x0, q0, (int)n, T);
+      } else if (use_blas) {
         const float alpha = -2.0f, beta = 0.0f;
         /* Full tile width keeps the hipBLAS kernel choice (and therefore the
            bit pattern of every distance) identical for every tile. */
@@ -976,12 +1063,12 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
         fprintf(stderr, "[tiled] distance kernel failed: %s\n", hipGetErrorString(hipGetLastError()));
         goto cleanup;
       }
-      if (g_time && !use_blas) { hipStreamSynchronize(s_work); g_t_fin += sk_now_ms() - _t0; }
+      if (g_time && !use_blas && !use_wmma) { hipStreamSynchronize(s_work); g_t_fin += sk_now_ms() - _t0; }
       _t0 = sk_now_ms();
       {
         int cv = (n - x0) < (long)T ? (int)(n - x0) : T;
         if (cv < 0) cv = 0;
-        if (use_blas)
+        if (use_blas || use_wmma)
           select_tile_fused_kernel<true><<<(unsigned int)B, STK_NT, 0, s_work>>>(
               d_dist, d_norms, x0, cv, T, K, q0,
               cand_k + tile * K, cand_id + tile * K, cpr);
@@ -1074,6 +1161,8 @@ cleanup:
   if (cand_k) hipFree(cand_k);
   if (d_dist) hipFree(d_dist);
   if (d_norms) hipFree(d_norms);
+  free(hbase_half);
+  if (d_base_h) hipFree(d_base_h);
   if (d_base) hipFree(d_base);
   sk_big_free(graph, (size_t)n * (size_t)K * sizeof(uint32_t));
   memdbg(15, "bf_freed");
