@@ -428,9 +428,9 @@ static int build_exact_graph_bf(sk_host_index* h, const float* base, long n,
                                 long dim, long K, uint32_t** graph_out)
 {
   int rc = 1;
-  int chunk = env_int("TILED_BF_CHUNK", 256);
+  int chunk = env_int("TILED_BF_CHUNK", 64);
   int use_half = env_int("TILED_BF_HALF", 1);
-  int depth = env_int("TILED_BF_DEPTH", 4);
+  int depth = env_int("TILED_BF_DEPTH", 2);
   if (chunk < 16) chunk = 16;
   if (chunk > 8192) chunk = 8192;
   if (depth < 2) depth = 2;
@@ -629,7 +629,7 @@ static hipStream_t g_cache_copy = NULL;
 
 static int sk_res_create(sk_host_index* h)
 {
-  if (env_int("TILED_RES_CACHE", 1)) {
+  if (env_int("TILED_RES_CACHE", 0)) {
     std::lock_guard<std::mutex> lk(g_cache_mu);
     if (g_cache_res) {
       h->res = g_cache_res; h->s_search = g_cache_search; h->s_copy = g_cache_copy;
@@ -655,7 +655,7 @@ static int sk_res_create(sk_host_index* h)
 static void sk_res_release(sk_host_index* h)
 {
   if (!h->res) return;
-  if (env_int("TILED_RES_CACHE", 1)) {
+  if (env_int("TILED_RES_CACHE", 0)) {
     std::lock_guard<std::mutex> lk(g_cache_mu);
     if (!g_cache_res) {
       g_cache_res = h->res; g_cache_search = h->s_search; g_cache_copy = h->s_copy;
