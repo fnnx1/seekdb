@@ -27,6 +27,9 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
 
 /* ---- env-gated profiling (TILED_TIME=1): host-time accumulators, ms ---- */
 static int g_time = 0;
@@ -68,6 +71,33 @@ typedef struct {
   uint32_t stamp_gen;
   void* pinned_base;
 } sk_bf_index;
+
+/* Large host buffers (dataset copy, neighbour graph) are tens to hundreds of
+   megabytes and are written once, front to back.  Faulting them in 4 KiB at a
+   time dominated the host side of the build, so map them huge-page backed and
+   populate them up front. */
+static void* sk_big_alloc(size_t bytes)
+{
+#ifdef __linux__
+  void* p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (p == MAP_FAILED) return NULL;
+  madvise(p, bytes, MADV_HUGEPAGE);
+  return p;
+#else
+  return malloc(bytes);
+#endif
+}
+
+static void sk_big_free(void* p, size_t bytes)
+{
+  if (!p) return;
+#ifdef __linux__
+  munmap(p, bytes);
+#else
+  (void)bytes;
+  free(p);
+#endif
+}
 
 static int env_int(const char* key, int dflt)
 {
@@ -460,14 +490,27 @@ __global__ static void select_topk_kernel(const float* __restrict__ keys,
 /* ---------------- fused finish + exact top-K tile select ----------------
  * The per-column norm correction of finish_distance_tile is folded into the
  * key computation (key = dot + (nq + nx), bit-identical arithmetic), removing
- * one full read+write of the tile.  Selection is a 3-pass scheme: two
+ * one full read+write of the tile.
+ *
+ * Fast path: a 1/28 strided sample of the row yields the (STK_EST_E *
+ * K / Cv)-th order statistic of the distance distribution via two narrowing
+ * 11+11 bit shared histograms; one collect pass then gathers every element at
+ * or below that threshold (~STK_EST_E of them, a handful of shared atomics per
+ * thread instead of one per element, which is what the old first pass cost),
+ * and an in-shared 30-bit radix select picks the exact K smallest of that set.
+ *
+ * Fallback: if the estimate is off (too few candidates, or a degenerate row
+ * overflows the candidate buffer) the previous exact scheme runs instead: two
  * narrowing passes over the row (11 + 11 high bits) resolve a 22-bit prefix,
- * then a single collect pass sends the (few) candidates that match the prefix
- * to shared memory where the last 10 bits are resolved.  Degenerate data that
- * overflows the candidate buffer falls back to two more global passes. */
+ * a collect pass sends the matching candidates to shared memory where the last
+ * 10 bits are resolved, and degenerate rows take two more global passes.
+ * Both paths emit the same K smallest, so the tile output is unchanged. */
 #define STK_NT 256
 #define STK_HB 2048
-#define STK_CAP 512
+#define STK_CAP 1024
+#define STK_SAMP 1024
+#define STK_MB 1024
+#define STK_EST_E 640
 #define STK_P1_BITS 11
 #define STK_LO_BITS 10
 #define STK_P1_SHIFT (32 - STK_P1_BITS)
@@ -567,6 +610,108 @@ __global__ static void select_tile_fused_kernel(const float* __restrict__ dots,
       ok[i] = v;
       oi[i] = id;
     }
+    return;
+  }
+
+  /* ---- sample-based threshold estimate -------------------------------------
+   * A 1/28 strided sample of the row (32-float chunks, so every fetched line is
+   * fully used) gives the (K*STK_EST_E/Cv) order statistic of the distance
+   * distribution; the count of row elements at or below that threshold is then
+   * ~STK_EST_E.  Only the sample pays shared-memory atomics, and one collect
+   * pass over the row gathers every element <= threshold.  If the collected
+   * set holds at least K elements it contains the exact K smallest (any value
+   * below the K-th collected element is necessarily collected too), so the
+   * in-shared rank select is exact.  Pathological rows fall back to the
+   * histogram passes below. */
+  {
+    const int ncch = STK_SAMP / 32;
+    const int cstep = (Cv + ncch - 1) / ncch;
+    const int lane = tid & 31;
+    long lr = (long)STK_EST_E * STK_SAMP / (long)Cv;
+    uint32_t q = (uint32_t)(lr < 1 ? 1 : (lr > STK_SAMP ? STK_SAMP : lr));
+    for (int i = tid; i < STK_MB; i += STK_NT) hist[i] = 0u;
+    if (tid == 0) { s_pat = 0u; s_less = 0u; s_rank = q; }
+    __syncthreads();
+    for (int c = tid >> 5; c < ncch; c += STK_NT / 32) {
+      int idx = c * cstep + lane;
+      if (idx < Cv) {
+        float v = RAW ? (drow[idx] + (nq + nx[idx])) : drow[idx];
+        atomicAdd(&hist[(__float_as_uint(v) >> 22) & (STK_MB - 1u)], 1u);
+      }
+    }
+    __syncthreads();
+    {
+      uint32_t pat = 0u, less = 0u, rank = q;
+      stk_pick(hist, part, STK_MB, 22, rank, pat, less, &s_pat, &s_less, &s_rank, tid);
+    }
+    {
+      const uint32_t pat1 = s_pat;
+      for (int i = tid; i < STK_MB; i += STK_NT) hist[i] = 0u;
+      __syncthreads();
+      for (int c = tid >> 5; c < ncch; c += STK_NT / 32) {
+        int idx = c * cstep + lane;
+        if (idx < Cv) {
+          float v = RAW ? (drow[idx] + (nq + nx[idx])) : drow[idx];
+          uint32_t u = __float_as_uint(v);
+          if ((u >> 22) == (pat1 >> 22)) atomicAdd(&hist[(u >> 12) & (STK_MB - 1u)], 1u);
+        }
+      }
+      __syncthreads();
+      {
+        uint32_t pat = pat1, less = s_less, rank = s_rank;
+        stk_pick(hist, part, STK_MB, 12, rank, pat, less, &s_pat, &s_less, &s_rank, tid);
+      }
+    }
+  }
+  const uint32_t ub = s_pat | 0xFFFu;   /* upper edge of the estimate bucket */
+  if (tid == 0) { cnt_c = 0u; cnt_ovf = 0u; }
+  __syncthreads();
+  STK_FOR_EACH({
+    if (u <= ub) {
+      uint32_t p = atomicAdd(&cnt_c, 1u);
+      if (p < (uint32_t)STK_CAP) { ck[p] = v; ci[p] = (uint32_t)(x0 + i); }
+      else atomicAdd(&cnt_ovf, 1u);
+    }
+  });
+  __syncthreads();
+  const uint32_t ncand = cnt_c;
+  if (ncand >= (uint32_t)K && cnt_ovf == 0u) {
+    /* ---- exact K smallest of the collected set (in shared memory) ---- */
+    uint32_t mpat = 0u, mless = 0u, mrank = (uint32_t)K, him = 0u;
+    #pragma unroll
+    for (int round = 0; round < 3; ++round) {
+      const int rshift = 22 - round * 10;
+      for (int i = tid; i < STK_MB; i += STK_NT) hist[i] = 0u;
+      __syncthreads();
+      for (uint32_t i = tid; i < ncand; i += STK_NT) {
+        uint32_t u = __float_as_uint(ck[i]);
+        if ((u & him) == (mpat & him)) atomicAdd(&hist[(u >> rshift) & (STK_MB - 1u)], 1u);
+      }
+      __syncthreads();
+      {
+        uint32_t pat = mpat, less = mless, rank = mrank;
+        stk_pick(hist, part, STK_MB, rshift, rank, pat, less, &s_pat, &s_less, &s_rank, tid);
+      }
+      mpat = s_pat; mless = s_less; mrank = s_rank;
+      him |= 0x3FFu << rshift;
+    }
+    const uint32_t bpat = mpat;
+    const uint32_t less_total = mless;
+    const uint32_t need_eq = mrank;
+    if (tid == 0) { cnt_c = 0u; cnt_ovf = 0u; }
+    __syncthreads();
+    for (uint32_t i = tid; i < ncand; i += STK_NT) {
+      uint32_t u = __float_as_uint(ck[i]);
+      if ((u & him) == (bpat & him)) {
+        uint32_t p = atomicAdd(&cnt_c, 1u);
+        if (p < need_eq) { sk[less_total + p] = ck[i]; si[less_total + p] = ci[i]; }
+      } else if (u < bpat) {
+        uint32_t p = atomicAdd(&cnt_ovf, 1u);
+        if (p < less_total) { sk[p] = ck[i]; si[p] = ci[i]; }
+      }
+    }
+    __syncthreads();
+    for (int i = tid; i < K; i += STK_NT) { ok[i] = sk[i]; oi[i] = si[i]; }
     return;
   }
 
@@ -687,6 +832,14 @@ __global__ static void select_tile_fused_kernel(const float* __restrict__ dots,
   }
 }
 
+static int sk_finish_graph_copy(uint32_t* graph, long K, uint32_t* stage,
+                                hipEvent_t ev, long q0, int rows)
+{
+  if (hipEventSynchronize(ev) != hipSuccess) return 1;
+  memcpy(graph + (size_t)q0 * K, stage, (size_t)rows * K * sizeof(uint32_t));
+  return 0;
+}
+
 static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
                                    int B, int T, uint32_t** graph_out)
 {
@@ -697,13 +850,18 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   float* cand_k = NULL;
   uint32_t* cand_id = NULL;
   float* d_graph_k = NULL;
-  uint32_t* d_graph_block = NULL;
-  uint32_t* stage = NULL;
+  uint32_t* d_graph_block[2];
+  uint32_t* stage[2];
+  int pend_buf[2];
+  long pend_q0[2];
+  int pend_rows[2];
+  int copy_npend = 0;
+  int copy_gen = 0;
+  hipStream_t s_work = NULL;
   hipStream_t s_copy = NULL;
-  hipEvent_t ev_copy = NULL;
-  int pending_copy = 0;
-  long pending_q0 = 0;
-  int pending_rows = 0;
+  hipEvent_t ev_copy[2];
+  hipEvent_t ev_final = NULL;
+  int ev_ready = 0;
   hipblasHandle_t blas = NULL;
   int use_blas = env_int("TILED_GEMM_BLAS", dim == 256 ? 1 : 0);
   uint32_t* graph = NULL;
@@ -715,13 +873,18 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
   size_t candidate_elems = (size_t)B * cpr;
   double _t0 = 0, _t_fn = 0;
 
+  d_graph_block[0] = d_graph_block[1] = NULL;
+  stage[0] = stage[1] = NULL;
+  pend_buf[0] = pend_buf[1] = 0;
+  pend_q0[0] = pend_q0[1] = 0;
+  pend_rows[0] = pend_rows[1] = 0;
+  ev_copy[0] = ev_copy[1] = NULL;
+
   memdbg(10, "bf_enter");
   g_time = env_int("TILED_TIME", 0);
   g_t_copyin = g_t_gemm = g_t_fin = g_t_tsel = g_t_fsel = g_t_gcopy = 0;
   g_n_gemm = 0;
   _t_fn = sk_now_ms();
-  int time_skip_gemm = env_int("TILED_TIME_SKIP_GEMM", 0);
-  int time_skip_sel = env_int("TILED_TIME_SKIP_SEL", 0);
   if (n <= 0 || dim <= 0 || K <= 0 || K > 256 || (K & (K - 1)) != 0 || B <= 0 || T <= 0 ||
       padded_n > INT_MAX || tile_elems > UINT_MAX || candidate_elems > UINT_MAX) return 1;
   if (hipMalloc((void**)&d_base, (size_t)padded_n * dim * sizeof(float)) != hipSuccess ||
@@ -730,11 +893,21 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
       hipMalloc((void**)&cand_k, candidate_elems * sizeof(float)) != hipSuccess ||
       hipMalloc((void**)&cand_id, candidate_elems * sizeof(uint32_t)) != hipSuccess ||
       hipMalloc((void**)&d_graph_k, (size_t)B * K * sizeof(float)) != hipSuccess ||
-      hipMalloc((void**)&d_graph_block, (size_t)B * K * sizeof(uint32_t)) != hipSuccess) {
+      hipMalloc((void**)&d_graph_block[0], (size_t)B * K * sizeof(uint32_t)) != hipSuccess ||
+      hipMalloc((void**)&d_graph_block[1], (size_t)B * K * sizeof(uint32_t)) != hipSuccess) {
     fprintf(stderr, "[tiled] allocation failed: %s\n", hipGetErrorString(hipGetLastError()));
     goto cleanup;
   }
   memdbg(11, "bf_allocs");
+  if (hipStreamCreateWithFlags(&s_work, hipStreamNonBlocking) != hipSuccess ||
+      hipStreamCreateWithFlags(&s_copy, hipStreamNonBlocking) != hipSuccess ||
+      hipEventCreateWithFlags(&ev_copy[0], hipEventDisableTiming) != hipSuccess ||
+      hipEventCreateWithFlags(&ev_copy[1], hipEventDisableTiming) != hipSuccess ||
+      hipEventCreateWithFlags(&ev_final, hipEventDisableTiming) != hipSuccess) {
+    fprintf(stderr, "[tiled] stream/event setup failed\n");
+    goto cleanup;
+  }
+  ev_ready = 1;
   _t0 = sk_now_ms();
   if (hipMemcpy(d_base, base, (size_t)n * dim * sizeof(float), hipMemcpyHostToDevice) != hipSuccess) {
     fprintf(stderr, "[tiled] initial copy failed: %s\n", hipGetErrorString(hipGetLastError()));
@@ -764,14 +937,13 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
       goto cleanup;
     }
     hipblasSetPointerMode(blas, HIPBLAS_POINTER_MODE_HOST);
-    hipblasSetStream(blas, 0);
+    hipblasSetStream(blas, s_work);
   }
   memdbg(12, "bf_gemm_ready");
-  graph = (uint32_t*)malloc((size_t)n * K * sizeof(uint32_t));
+  graph = (uint32_t*)sk_big_alloc((size_t)n * K * sizeof(uint32_t));
   if (!graph) { fprintf(stderr, "[tiled] host graph allocation failed\n"); goto cleanup; }
-  if (hipHostMalloc((void**)&stage, (size_t)B * K * sizeof(uint32_t), 0) != hipSuccess ||
-      hipStreamCreateWithFlags(&s_copy, hipStreamNonBlocking) != hipSuccess ||
-      hipEventCreateWithFlags(&ev_copy, hipEventDisableTiming) != hipSuccess) {
+  if (hipHostMalloc((void**)&stage[0], (size_t)B * K * sizeof(uint32_t), 0) != hipSuccess ||
+      hipHostMalloc((void**)&stage[1], (size_t)B * K * sizeof(uint32_t), 0) != hipSuccess) {
     fprintf(stderr, "[tiled] async copy setup failed\n"); goto cleanup;
   }
 
@@ -783,6 +955,8 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
       _t0 = sk_now_ms();
       if (use_blas) {
         const float alpha = -2.0f, beta = 0.0f;
+        /* Full tile width keeps the hipBLAS kernel choice (and therefore the
+           bit pattern of every distance) identical for every tile. */
         hipblasStatus_t hs = hipblasSgemm(blas, HIPBLAS_OP_T, HIPBLAS_OP_N,
             T, B, (int)dim, &alpha,
             d_base + (size_t)x0 * dim, (int)dim,
@@ -792,27 +966,27 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
           fprintf(stderr, "[tiled] sgemm failed q=%ld tile=%d status=%d\n", q0, tile, (int)hs);
           goto cleanup;
         }
-        if (g_time) { hipDeviceSynchronize(); g_t_gemm += sk_now_ms() - _t0; g_n_gemm++; _t0 = sk_now_ms(); }
+        if (g_time) { hipStreamSynchronize(s_work); g_t_gemm += sk_now_ms() - _t0; g_n_gemm++; }
       } else {
         dim3 gdim((unsigned int)((B + DT_BM - 1) / DT_BM), (unsigned int)(T / DT_BN));
-        dist_tile_kernel<<<gdim, 256>>>(d_base, d_base, d_norms, d_dist,
+        dist_tile_kernel<<<gdim, 256, 0, s_work>>>(d_base, d_base, d_norms, d_dist,
                                         (int)dim, q0, x0, B, T, n);
       }
       if (hipGetLastError() != hipSuccess) {
         fprintf(stderr, "[tiled] distance kernel failed: %s\n", hipGetErrorString(hipGetLastError()));
         goto cleanup;
       }
-      if (g_time) { hipDeviceSynchronize(); g_t_fin += sk_now_ms() - _t0; }
+      if (g_time && !use_blas) { hipStreamSynchronize(s_work); g_t_fin += sk_now_ms() - _t0; }
       _t0 = sk_now_ms();
       {
         int cv = (n - x0) < (long)T ? (int)(n - x0) : T;
         if (cv < 0) cv = 0;
         if (use_blas)
-          select_tile_fused_kernel<true><<<(unsigned int)B, STK_NT>>>(
+          select_tile_fused_kernel<true><<<(unsigned int)B, STK_NT, 0, s_work>>>(
               d_dist, d_norms, x0, cv, T, K, q0,
               cand_k + tile * K, cand_id + tile * K, cpr);
         else
-          select_tile_fused_kernel<false><<<(unsigned int)B, STK_NT>>>(
+          select_tile_fused_kernel<false><<<(unsigned int)B, STK_NT, 0, s_work>>>(
               d_dist, d_norms, x0, cv, T, K, q0,
               cand_k + tile * K, cand_id + tile * K, cpr);
       }
@@ -820,36 +994,60 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
         fprintf(stderr, "[tiled] tile select failed: %s\n", hipGetErrorString(hipGetLastError()));
         goto cleanup;
       }
-      if (g_time) { hipDeviceSynchronize(); g_t_tsel += sk_now_ms() - _t0; }
+      if (g_time) { hipStreamSynchronize(s_work); g_t_tsel += sk_now_ms() - _t0; }
+    }
+
+    /* Recycle the pinned staging buffer owned by the oldest pending copy. */
+    if (copy_npend == 2) {
+      int b0 = pend_buf[0];
+      if (sk_finish_graph_copy(graph, K, stage[b0], ev_copy[b0], pend_q0[0], pend_rows[0]) != 0) {
+        fprintf(stderr, "[tiled] copy wait failed\n"); goto cleanup;
+      }
+      pend_buf[0] = pend_buf[1]; pend_q0[0] = pend_q0[1]; pend_rows[0] = pend_rows[1];
+      copy_npend = 1;
+    }
+
+    _t0 = sk_now_ms();
+    {
+      int gb = copy_gen & 1;
+      if (copy_gen >= 2 && hipStreamWaitEvent(s_work, ev_copy[gb], 0) != hipSuccess) {
+        fprintf(stderr, "[tiled] graph buffer wait failed\n"); goto cleanup;
+      }
+      select_topk_kernel<<<(unsigned int)B, 256, 0, s_work>>>(
+          cand_k, cand_id, cpr, cpr, K, 0, K, d_graph_k, d_graph_block[gb]);
+      if (hipGetLastError() != hipSuccess) {
+        fprintf(stderr, "[tiled] final select failed: %s\n", hipGetErrorString(hipGetLastError()));
+        goto cleanup;
+      }
+      if (g_time) { hipStreamSynchronize(s_work); g_t_fsel += sk_now_ms() - _t0; }
     }
     _t0 = sk_now_ms();
-    if (pending_copy) {
-      if (hipEventSynchronize(ev_copy) != hipSuccess) { fprintf(stderr, "[tiled] copy wait failed\n"); goto cleanup; }
-      memcpy(graph + (size_t)pending_q0 * K, stage, (size_t)pending_rows * K * sizeof(uint32_t));
-      pending_copy = 0;
+    {
+      int gb = copy_gen & 1;
+      if (hipEventRecord(ev_final, s_work) != hipSuccess ||
+          hipStreamWaitEvent(s_copy, ev_final, 0) != hipSuccess) {
+        fprintf(stderr, "[tiled] graph copy order failed\n"); goto cleanup;
+      }
+      if (hipMemcpyAsync(stage[gb], d_graph_block[gb],
+                         (size_t)qrows * K * sizeof(uint32_t), hipMemcpyDeviceToHost, s_copy) != hipSuccess ||
+          hipEventRecord(ev_copy[gb], s_copy) != hipSuccess) {
+        fprintf(stderr, "[tiled] graph async copy failed: %s\n", hipGetErrorString(hipGetLastError()));
+        goto cleanup;
+      }
+      pend_buf[copy_npend] = gb; pend_q0[copy_npend] = q0; pend_rows[copy_npend] = qrows;
+      copy_npend++;
+      copy_gen++;
     }
-    select_topk_kernel<<<(unsigned int)B, 256>>>(
-        cand_k, cand_id, cpr, cpr, K, 0, K, d_graph_k, d_graph_block);
-    if (hipGetLastError() != hipSuccess || hipDeviceSynchronize() != hipSuccess) {
-      fprintf(stderr, "[tiled] final select failed: %s\n", hipGetErrorString(hipGetLastError()));
-      goto cleanup;
-    }
-    if (g_time) g_t_fsel += sk_now_ms() - _t0;
-    _t0 = sk_now_ms();
-    if (hipMemcpyAsync(stage, d_graph_block,
-                       (size_t)qrows * K * sizeof(uint32_t), hipMemcpyDeviceToHost, s_copy) != hipSuccess ||
-        hipEventRecord(ev_copy, s_copy) != hipSuccess) {
-      fprintf(stderr, "[tiled] graph async copy failed: %s\n", hipGetErrorString(hipGetLastError()));
-      goto cleanup;
-    }
-    pending_copy = 1; pending_q0 = q0; pending_rows = qrows;
     if (g_time) g_t_gcopy += sk_now_ms() - _t0;
   }
 
-  if (pending_copy) {
-    if (hipEventSynchronize(ev_copy) != hipSuccess) { fprintf(stderr, "[tiled] final copy wait failed\n"); goto cleanup; }
-    memcpy(graph + (size_t)pending_q0 * K, stage, (size_t)pending_rows * K * sizeof(uint32_t));
-    pending_copy = 0;
+  while (copy_npend > 0) {
+    int b0 = pend_buf[0];
+    if (sk_finish_graph_copy(graph, K, stage[b0], ev_copy[b0], pend_q0[0], pend_rows[0]) != 0) {
+      fprintf(stderr, "[tiled] final copy wait failed\n"); goto cleanup;
+    }
+    pend_buf[0] = pend_buf[1]; pend_q0[0] = pend_q0[1]; pend_rows[0] = pend_rows[1];
+    copy_npend--;
   }
   memdbg(13, "bf_loop_done");
   if (hipDeviceSynchronize() != hipSuccess) goto cleanup;
@@ -861,17 +1059,23 @@ static int build_exact_tiled_graph(const float* base, long n, long dim, int K,
 cleanup:
   memdbg(14, "bf_cleanup");
   if (blas) hipblasDestroy(blas);
-  if (d_graph_block) hipFree(d_graph_block);
-  if (stage) hipHostFree(stage);
-  if (ev_copy) hipEventDestroy(ev_copy);
+  if (ev_ready) {
+    hipEventDestroy(ev_copy[0]); hipEventDestroy(ev_copy[1]);
+    hipEventDestroy(ev_final);
+  }
   if (s_copy) hipStreamDestroy(s_copy);
+  if (s_work) hipStreamDestroy(s_work);
+  if (stage[0]) hipHostFree(stage[0]);
+  if (stage[1]) hipHostFree(stage[1]);
+  if (d_graph_block[0]) hipFree(d_graph_block[0]);
+  if (d_graph_block[1]) hipFree(d_graph_block[1]);
   if (d_graph_k) hipFree(d_graph_k);
   if (cand_id) hipFree(cand_id);
   if (cand_k) hipFree(cand_k);
   if (d_dist) hipFree(d_dist);
   if (d_norms) hipFree(d_norms);
   if (d_base) hipFree(d_base);
-  free(graph);
+  sk_big_free(graph, (size_t)n * (size_t)K * sizeof(uint32_t));
   memdbg(15, "bf_freed");
   return rc;
 }
@@ -916,7 +1120,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   int expand_seeds = env_int("TILED_EXPAND_SEEDS", 0);
   if (rerank_l > 0 || expand_seeds > 0) {
     size_t base_bytes = (size_t)n * (size_t)dim * sizeof(float);
-    h->host_base = (float*)malloc(base_bytes);
+    h->host_base = (float*)sk_big_alloc(base_bytes);
     if (!h->host_base) { free(h); return NULL; }
     memcpy(h->host_base, base, base_bytes);
   }
@@ -1032,7 +1236,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     h->host_graph = graph;
     h->graph_k = h->k;
   } else {
-    free(graph);
+    sk_big_free(graph, (size_t)n * (size_t)h->k * sizeof(uint32_t));
   }
   memdbg(24, "build_return");
   if (env_int("TILED_MEMDBG", 0) == 1) mem_sampler_stop();
@@ -1045,7 +1249,7 @@ fail:
     mem_sampler_stop();
     fprintf(stderr, "[memdbg] fullrun peak=%.3f GB at phase=%d\n", (double)g_mem_peak.load() / 1e9, g_mem_peak_phase.load());
   }
-  free(h->host_base);
+  sk_big_free(h->host_base, (size_t)h->n * (size_t)h->dim * sizeof(float));
   free(h->host_graph);
   free(h->stamp);
   free(h);
@@ -1199,7 +1403,7 @@ void seekdb_cuvs_free(void* handle)
     mem_sampler_stop();
     fprintf(stderr, "[memdbg] fullrun peak=%.3f GB at phase=%d\n", (double)g_mem_peak.load() / 1e9, g_mem_peak_phase.load());
   }
-  free(h->host_base);
+  sk_big_free(h->host_base, (size_t)h->n * (size_t)h->dim * sizeof(float));
   free(h->host_graph);
   free(h->stamp);
   free(h);
@@ -1295,11 +1499,11 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
     if (cuvsCagraIndexGetDataset(h->idx, &dv) == CUVS_SUCCESS &&
         dv.dl_tensor.data && dv.dl_tensor.dtype.bits == 32 &&
         dv.dl_tensor.shape[0] == n && dv.dl_tensor.shape[1] == dim) {
-      h->host_base = (float*)malloc((size_t)n * dim * sizeof(float));
+      h->host_base = (float*)sk_big_alloc((size_t)n * dim * sizeof(float));
       if (h->host_base &&
           cudaMemcpy(h->host_base, dv.dl_tensor.data, (size_t)n * dim * sizeof(float),
                      cudaMemcpyDeviceToHost) != cudaSuccess) {
-        free(h->host_base); h->host_base = NULL;
+        sk_big_free(h->host_base, (size_t)n * dim * sizeof(float)); h->host_base = NULL;
       }
     }
   }
