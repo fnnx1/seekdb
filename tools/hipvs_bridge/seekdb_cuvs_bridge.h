@@ -23,7 +23,11 @@ void* seekdb_cuvs_build(const float* base, long n, long dim);
 int   seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
                          unsigned int* out_ids, float* out_dist);
 void  seekdb_cuvs_free(void* handle);
+int   seekdb_cuvs_set_base(void* handle, const float* base, long n, long dim);
 int seekdb_cuvs_serialize(void* handle, const char* filename);
+/* Deserialize a CAGRA snapshot.  Graph-only snapshots (the default) require
+ * seekdb_cuvs_set_base before search; snapshots containing a dataset are
+ * immediately searchable and accept set_base as a no-op. */
 void* seekdb_cuvs_deserialize(const char* filename, long n, long dim);
 #ifdef __cplusplus
 }

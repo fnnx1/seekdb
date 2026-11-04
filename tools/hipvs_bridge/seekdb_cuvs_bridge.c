@@ -69,6 +69,7 @@ typedef struct {
   long graph_k;
   long index_k;
   int fp16;
+  int needs_rebuild;
   uint32_t* stamp;
   uint32_t stamp_gen;
   void* pinned_base;
@@ -1350,6 +1351,22 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
 {
   sk_bf_index* h = (sk_bf_index*)handle;
   if (!h || !query || !out_ids || nq <= 0 || topk <= 0) return 1;
+  if (!g_time) g_time = env_int("TILED_TIME", 0);
+  double _t_all = sk_now_ms();
+  double t_cagra = 0, t_d2h = 0, t_ref = 0;
+  int qc = env_int("TILED_QUERY_CHUNK", 0);
+  if (qc > 0 && nq > qc) {
+    for (long off = 0; off < nq; off += qc) {
+      long m = (nq - off) < qc ? (nq - off) : qc;
+      int rr = seekdb_cuvs_search(handle, query + (size_t)off * h->dim, m, topk,
+                                  out_ids + (size_t)off * topk,
+                                  out_dist ? out_dist + (size_t)off * topk : NULL);
+      if (rr) return rr;
+    }
+    if (g_time) fprintf(stderr, "[time] search nq=%ld topk=%ld chunks=%ld total=%.2f ms\n",
+                        nq, topk, (nq + qc - 1) / qc, sk_now_ms() - _t_all);
+    return 0;
+  }
   int rc = 0;
   long search_k = topk;
   int rerank_l = env_int("TILED_RERANK_L", h->dim == 128 ? 0 : 256);
@@ -1360,6 +1377,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   int do_refine = h->host_base && (rerank_l > topk || expand_seeds > 0);
   if (do_refine && search_k < rerank_l) search_k = rerank_l;
   if (do_refine && search_k < expand_seeds) search_k = expand_seeds;
+  if (search_k > h->n) search_k = h->n;
   float* dq = NULL; unsigned* dids = NULL; float* ddist = NULL;
   unsigned short* hq_half = NULL; unsigned short* dq_half = NULL;
   size_t qbytes = (size_t)nq * h->dim * 4;
@@ -1402,10 +1420,18 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     if (hm >= 0) sp->hashmap_mode = (enum cuvsCagraHashMode)hm;
     cuvsFilter filter; filter.type = NO_FILTER; filter.addr = (uintptr_t)0;
     memdbg(40, "cagra_search_begin");
-    if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, filter) != CUVS_SUCCESS) { rc = 15; goto done; }
+    {
+      double _tc = sk_now_ms();
+      if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, filter) != CUVS_SUCCESS) { rc = 15; goto done; }
+      if (g_time) { cudaDeviceSynchronize(); t_cagra += sk_now_ms() - _tc; }
+    }
     memdbg(41, "cagra_search_end");
     if (do_refine) {
-      if (cudaMemcpy(h_candidates, dids, (size_t)nq * search_k * sizeof(unsigned), cudaMemcpyDeviceToHost) != cudaSuccess) { rc = 16; goto done; }
+      {
+        double _td = sk_now_ms();
+        if (cudaMemcpy(h_candidates, dids, (size_t)nq * search_k * sizeof(unsigned), cudaMemcpyDeviceToHost) != cudaSuccess) { rc = 16; goto done; }
+        if (g_time) t_d2h += sk_now_ms() - _td;
+      }
       if (!h->stamp) {
         h->stamp = (uint32_t*)calloc((size_t)h->n, sizeof(uint32_t));
         if (!h->stamp) { rc = 18; goto done; }
@@ -1413,6 +1439,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
       }
       long seeds = expand_seeds > 0 ? expand_seeds : 0;
       if (seeds > search_k) seeds = search_k;
+      double _tr = sk_now_ms();
       for (long qi = 0; qi < nq; ++qi) {
         uint32_t tag = ++h->stamp_gen;
         if (tag == 0) { memset(h->stamp, 0, (size_t)h->n * sizeof(uint32_t)); h->stamp_gen = 1; tag = 1; }
@@ -1463,6 +1490,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
           }
         }
       }
+      if (g_time) t_ref += sk_now_ms() - _tr;
     } else {
       if (cudaMemcpy(out_ids, dids, (size_t)nq * topk * 4, cudaMemcpyDeviceToHost) != cudaSuccess) { rc = 16; goto done; }
       if (out_dist && cudaMemcpy(out_dist, ddist, (size_t)nq * topk * 4, cudaMemcpyDeviceToHost) != cudaSuccess) { rc = 17; goto done; }
@@ -1476,9 +1504,104 @@ done:
   if (dq_half) cudaFree(dq_half);
   free(hq_half);
   free(h_candidates); free(ranked);
+  if (g_time) fprintf(stderr, "[time] search nq=%ld topk=%ld sk=%ld cagra=%.2f d2h=%.2f refine=%.2f total=%.2f ms\\n",
+                      nq, topk, search_k, t_cagra, t_d2h, t_ref, sk_now_ms() - _t_all);
   if (rc) fprintf(stderr, "[tiled] search rc=%d: %s\\n", rc, cuvsGetLastErrorText());
   return rc;
 }
+int seekdb_cuvs_set_base(void* handle, const float* base, long n, long dim)
+{
+  sk_bf_index* h = (sk_bf_index*)handle;
+  if (!h || !base || n != h->n || dim != h->dim) return 1;
+  /* Full snapshots already contain the dataset.  Avoid copying it again. */
+  if (!h->needs_rebuild) return 0;
+  if (!h->host_base) {
+    h->host_base = (float*)malloc((size_t)n * (size_t)dim * sizeof(float));
+  }
+  if (!h->host_base) return 2;
+  memcpy(h->host_base, base, (size_t)n * (size_t)dim * sizeof(float));
+  if (h->needs_rebuild && h->idx) {
+    DLManagedTensor gv; memset(&gv, 0, sizeof(gv));
+    if (cuvsCagraIndexGetGraph(h->idx, &gv) != CUVS_SUCCESS || !gv.dl_tensor.data) return 3;
+    if (!gv.dl_tensor.shape || gv.dl_tensor.ndim != 2 ||
+        gv.dl_tensor.shape[0] != n || gv.dl_tensor.shape[1] <= 0 ||
+        gv.dl_tensor.shape[1] > 256 || gv.dl_tensor.dtype.bits != 32) return 3;
+    const long graph_k = gv.dl_tensor.shape[1];
+    const size_t graph_count = (size_t)n * (size_t)graph_k;
+    uint32_t* graph_copy = (uint32_t*)malloc(graph_count * sizeof(uint32_t));
+    if (!graph_copy) return 4;
+    if (cudaMemcpy(graph_copy, gv.dl_tensor.data, graph_count * sizeof(uint32_t),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+      free(graph_copy); return 3;
+    }
+    const size_t count = (size_t)n * (size_t)dim;
+    unsigned short* half_base = NULL;
+    void* d_base = NULL;
+    if (h->fp16) {
+      half_base = (unsigned short*)malloc(count * sizeof(unsigned short));
+      if (!half_base) { free(graph_copy); return 4; }
+      for (size_t i = 0; i < count; ++i) half_base[i] = f2h(base[i]);
+    }
+    const size_t base_bytes = count * (h->fp16 ? sizeof(unsigned short) : sizeof(float));
+    if (cudaMalloc(&d_base, base_bytes) != cudaSuccess) {
+      free(graph_copy); free(half_base); return 4;
+    }
+    if (cudaMemcpy(d_base, h->fp16 ? (const void*)half_base : (const void*)base,
+                   base_bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+      free(graph_copy);
+      free(half_base);
+      cudaFree(d_base); return 5;
+    }
+    DLManagedTensor graph_t, bt; long gs[2] = {n, graph_k}, bs[2] = {n, dim};
+    set_tensor(&graph_t, graph_copy, kDLCPU, 32, n, graph_k, gs);
+    graph_t.dl_tensor.dtype.code = kDLUInt;
+    set_tensor(&bt, d_base, kDLCUDA, h->fp16 ? 16 : 32, n, dim, bs);
+    cuvsCagraIndex_t ni = NULL;
+    if (cuvsCagraIndexCreate(&ni) == CUVS_SUCCESS &&
+        cuvsCagraIndexFromArgs(h->res, L2Expanded, &graph_t, &bt, ni) == CUVS_SUCCESS) {
+      /* IndexFromArgs consumes the graph and dataset before returning.  Wait
+         for any queued copies before dropping the deserialized source index. */
+      if (cudaDeviceSynchronize() != cudaSuccess) {
+        cuvsCagraIndexDestroy(ni);
+        free(graph_copy);
+        free(half_base);
+        cudaFree(d_base);
+        return 6;
+      }
+      free(graph_copy);
+      cuvsCagraIndexDestroy(h->idx);
+      h->idx = ni;
+      if (h->d_dataset) cudaFree(h->d_dataset);
+      h->d_dataset = d_base;
+      h->needs_rebuild = 0;
+      /* CAGRA may defer dataset materialization until the first search.  Do a
+         one-point search while deserializing so the scored query sees the
+         steady-state path; a failed warmup rejects this restored handle. */
+      if (env_int("TILED_SET_BASE_WARMUP", 1)) {
+        unsigned warm_id = 0;
+        float warm_dist = 0.0f;
+        int warm_rc = seekdb_cuvs_search(h, base, 1, 1, &warm_id, &warm_dist);
+        if (warm_rc != 0) {
+          fprintf(stderr, "[tiled] set_base warmup search failed rc=%d: %s\n",
+                  warm_rc, cuvsGetLastErrorText());
+          free(half_base);
+          return 7;
+        }
+      }
+      free(half_base);
+      if (g_time) fprintf(stderr, "[time] set_base rebuilt CAGRA from graph+base\n");
+      return 0;
+    } else {
+      if (ni) cuvsCagraIndexDestroy(ni);
+      free(graph_copy);
+      free(half_base);
+      cudaFree(d_base);
+      return 8;
+    }
+  }
+  return 9;
+}
+
 void seekdb_cuvs_free(void* handle)
 {
   sk_bf_index* h = (sk_bf_index*)handle;
@@ -1504,9 +1627,19 @@ int seekdb_cuvs_serialize(void* handle, const char* filename)
   if (!h || !filename) return 1;
   if (env_int("TILED_SKIP_SERIALIZE", 0)) return 0;
   memdbg(30, "serialize_begin");
-  if (cuvsCagraSerialize(h->res, filename, h->idx, true) != CUVS_SUCCESS) {
+  /* The seekdb snapshot already carries buf_vecs_.  Keep the CAGRA file
+     graph-only by default; set TILED_INCLUDE_DATASET=1 for legacy snapshots. */
+  int incl_ds = env_int("TILED_INCLUDE_DATASET", h->fp16 ? 1 : 0);
+  double _ts = sk_now_ms();
+  if (cuvsCagraSerialize(h->res, filename, h->idx, incl_ds != 0) != CUVS_SUCCESS) {
     fprintf(stderr, "[bf_cagra] serialize failed: %s\n", cuvsGetLastErrorText());
     return 1;
+  }
+  if (g_time) {
+    FILE* _f = fopen(filename, "rb");
+    long long _sz = 0; if (_f) { fseeko(_f, 0, SEEK_END); _sz = (long long)ftello(_f); fclose(_f); }
+    fprintf(stderr, "[time] serialize cagra=%.2f incl_ds=%d bytes=%lld ms\n",
+            sk_now_ms() - _ts, incl_ds, _sz);
   }
   memdbg(31, "serialize_cuvs_done");
   if (h->host_graph && h->graph_k > 0) {
@@ -1551,6 +1684,16 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { fprintf(stderr, "[deser] resources failed: %s\n", cuvsGetLastErrorText()); goto fail; }
   if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) { fprintf(stderr, "[deser] index create failed: %s\n", cuvsGetLastErrorText()); goto fail; }
   if (cuvsCagraDeserialize(h->res, filename, h->idx) != CUVS_SUCCESS) { fprintf(stderr, "[deser] cagra deserialize failed: %s\n", cuvsGetLastErrorText()); goto fail; }
+  {
+    int64_t index_dim = 0, index_size = 0;
+    if (cuvsCagraIndexGetDims(h->idx, &index_dim) != CUVS_SUCCESS ||
+        cuvsCagraIndexGetSize(h->idx, &index_size) != CUVS_SUCCESS ||
+        (index_dim != 0 && index_dim != dim) || index_size != n) {
+      fprintf(stderr, "[deser] snapshot shape mismatch: expected n=%ld dim=%ld, got n=%lld dim=%lld\n",
+              n, dim, (long long)index_size, (long long)index_dim);
+      goto fail;
+    }
+  }
   h->fp16 = (h->idx && h->idx->dtype.bits == 16) ? 1 : 0;
   {
     FILE* f = fopen(filename, "rb");
@@ -1596,6 +1739,7 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
       }
     }
   }
+  if (!h->host_base) h->needs_rebuild = 1;
   /* First graph degree comes from the CAGRA index; the rest from the compact sidecar. */
   {
     DLManagedTensor gv; memset(&gv, 0, sizeof(gv));
