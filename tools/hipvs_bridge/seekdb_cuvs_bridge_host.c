@@ -25,6 +25,7 @@
 #include <limits.h>
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <chrono>
 #include <vector>
@@ -55,6 +56,74 @@ static std::atomic<int> g_mem_sampling{0};
 static std::atomic<long long> g_mem_peak{0};
 static std::atomic<int> g_mem_phase{0};
 static std::atomic<int> g_mem_peak_phase{0};
+
+static long long mem_used_bytes();
+/* Fine-grained VRAM trace (TILED_VRAM_TRACE=1): samples every ~250 us and
+ * records every new high-water mark together with the current step label. */
+static std::atomic<int> g_vt_run{0};
+static std::atomic<long long> g_vt_peak{0};
+static std::atomic<int> g_vt_peak_step{0};
+static std::atomic<double> g_vt_peak_ms{0};
+static std::atomic<double> g_vt_t0{0};
+static std::atomic<int> g_vt_step{0};
+static const char* const g_vt_names[] = {
+  "0", "1", "2", "3", "4", "5-build_entry", "6", "7", "8", "9",
+  "10-bf_enter", "11-bf_dataset", "12-bf_index", "13-bf_pipeline", "14-bf_search",
+  "15-bf_graph_done", "16-bf_freed", "17", "18", "19",
+  "20-res_created", "21-bf_done", "22-import_begin", "23-import_done", "24-build_return",
+  "25", "26", "27", "28", "29",
+  "30-ser_begin", "31-ser_graph_d2h", "32-ser_data_d2h", "33-ser_write", "34-ser_done",
+  "35", "36", "37", "38", "39",
+  "40-search_begin", "41-search_done", "42-search_dq", "43-search_params", "44-search_cagra",
+  "45-search_cagra_done", "46-search_d2h", "47-search_rerank", "48-search_free", "49",
+  "50-snap_header", "51-snap_read_graph", "52-snap_read_data", "53-snap_res", "54-snap_fromargs",
+  "55-snap_done", "56-snap_free", "57", "58", "59",
+  "60-free_begin", "61-free_done"};
+static inline void vt_step(int step)
+{
+  g_vt_step.store(step, std::memory_order_relaxed);
+  g_mem_phase.store(step, std::memory_order_relaxed);
+}
+static void vt_start()
+{
+  if (!env_int("TILED_VRAM_TRACE", 0)) return;
+  g_vt_t0.store(sk_now_ms());
+  g_vt_run.store(1);
+  std::thread([]() {
+    long long best = 0;
+    while (g_vt_run.load(std::memory_order_relaxed)) {
+      long long u = mem_used_bytes();
+      if (u > best) {
+        best = u;
+        int st = g_vt_step.load(std::memory_order_relaxed);
+        g_vt_peak.store(best, std::memory_order_relaxed);
+        g_vt_peak_step.store(st, std::memory_order_relaxed);
+        g_vt_peak_ms.store(sk_now_ms() - g_vt_t0.load(), std::memory_order_relaxed);
+      }
+      std::this_thread::sleep_for(std::chrono::microseconds(250));
+    }
+  }).detach();
+}
+static void vt_report(const char* tag)
+{
+  if (!env_int("TILED_VRAM_TRACE", 0)) return;
+  int st = g_vt_peak_step.load();
+  fprintf(stderr, "[vtrace] %-18s peak=%.3f GB step=%d(%s) at %.1f ms\n", tag,
+          (double)g_vt_peak.load() / 1e9, st,
+          (st >= 0 && st < (int)(sizeof(g_vt_names) / sizeof(g_vt_names[0]))) ? g_vt_names[st] : "?",
+          g_vt_peak_ms.load());
+}
+static void vt_stop()
+{
+  if (!env_int("TILED_VRAM_TRACE", 0)) return;
+  g_vt_run.store(0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  int st = g_vt_peak_step.load();
+  fprintf(stderr, "[vtrace] peak=%.3f GB step=%d(%s) at %.1f ms\n",
+          (double)g_vt_peak.load() / 1e9, st,
+          (st >= 0 && st < (int)(sizeof(g_vt_names) / sizeof(g_vt_names[0]))) ? g_vt_names[st] : "?",
+          g_vt_peak_ms.load());
+}
 
 static long long mem_used_bytes()
 {
@@ -383,6 +452,7 @@ static int build_exact_graph_bf(sk_host_index* h, const float* base, long n,
   size_t out_bytes = (size_t)chunk * (size_t)K * sizeof(int64_t);
 
   memdbg(10, "bf_enter");
+  vt_step(10);
   double t_all0 = sk_now_ms();
   double t_wait0 = 0;
   long nchunks = 0;
@@ -396,6 +466,7 @@ static int build_exact_graph_bf(sk_host_index* h, const float* base, long n,
 
   /* dataset on device (fp16 halves both footprint and scan bandwidth) */
   {
+    vt_step(11);
     double _t0 = sk_now_ms();
     if (use_half) {
       half_base = (unsigned short*)malloc((size_t)n * (size_t)dim * sizeof(unsigned short));
@@ -429,6 +500,7 @@ static int build_exact_graph_bf(sk_host_index* h, const float* base, long n,
     g_t_bfbuild = sk_now_ms() - _t0;
   }
   memdbg(12, "bf_index_built");
+  vt_step(12);
 
   if (hipMalloc((void**)&d_dist, (size_t)chunk * (size_t)K * sizeof(float)) != hipSuccess) {
     fprintf(stderr, "[host] d_dist alloc failed\n"); goto cleanup;
@@ -443,6 +515,7 @@ static int build_exact_graph_bf(sk_host_index* h, const float* base, long n,
     }
   }
   memdbg(13, "bf_pipeline_ready");
+  vt_step(13);
 
   filter.type = NO_FILTER; filter.addr = (uintptr_t)0;
   for (long q0 = 0; q0 < n; q0 += chunk) {
@@ -463,6 +536,7 @@ static int build_exact_graph_bf(sk_host_index* h, const float* base, long n,
                    kDLCUDA, use_half ? 16 : 32, nq, dim, qsh);
     set_tensor_i64(&nt, d_ids[slot], kDLCUDA, nq, K, osh);
     set_tensor_f32(&dt, d_dist, kDLCUDA, 32, nq, K, osh);
+    vt_step(14);
     double _s0 = sk_now_ms();
     if (cuvsBruteForceSearch(h->res, bf, &qt, &nt, &dt, filter) != CUVS_SUCCESS) {
       fprintf(stderr, "[host] bf search failed q0=%ld: %s\n", q0, cuvsGetLastErrorText());
@@ -512,6 +586,7 @@ static int build_exact_graph_bf(sk_host_index* h, const float* base, long n,
   }
   g_t_wait = t_wait0;
   memdbg(15, "bf_graph_done");
+  vt_step(15);
 
   if (env_int("TILED_SELFCHECK", 0)) {
     long self = 0, invalid = 0;
@@ -538,11 +613,30 @@ cleanup:
   free(half_base);
   free(graph);
   memdbg(16, "bf_freed");
+  vt_step(16);
   return rc;
 }
 
+/* Single-slot resources cache: resources destroyed per handle make the driver
+ * keep ~180 MB of pools/workspaces alive after seekdb_cuvs_free(), inflating
+ * the peak of a build -> free -> load -> query lifecycle.  The most recently
+ * retired (resources, streams) pair is kept and handed to the next handle;
+ * live handles never share resources, so queries stay independent. */
+static std::mutex g_cache_mu;
+static cuvsResources_t g_cache_res = NULL;
+static hipStream_t g_cache_search = NULL;
+static hipStream_t g_cache_copy = NULL;
+
 static int sk_res_create(sk_host_index* h)
 {
+  if (env_int("TILED_RES_CACHE", 1)) {
+    std::lock_guard<std::mutex> lk(g_cache_mu);
+    if (g_cache_res) {
+      h->res = g_cache_res; h->s_search = g_cache_search; h->s_copy = g_cache_copy;
+      g_cache_res = NULL; g_cache_search = NULL; g_cache_copy = NULL;
+      return 0;
+    }
+  }
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) return 1;
   if (hipStreamCreateWithFlags(&h->s_search, hipStreamNonBlocking) == hipSuccess &&
       hipStreamCreateWithFlags(&h->s_copy, hipStreamNonBlocking) == hipSuccess) {
@@ -556,6 +650,23 @@ static int sk_res_create(sk_host_index* h)
     if (h->s_copy) { hipStreamDestroy(h->s_copy); h->s_copy = NULL; }
   }
   return 0;
+}
+
+static void sk_res_release(sk_host_index* h)
+{
+  if (!h->res) return;
+  if (env_int("TILED_RES_CACHE", 1)) {
+    std::lock_guard<std::mutex> lk(g_cache_mu);
+    if (!g_cache_res) {
+      g_cache_res = h->res; g_cache_search = h->s_search; g_cache_copy = h->s_copy;
+      h->res = NULL; h->s_search = NULL; h->s_copy = NULL;
+      return;
+    }
+  }
+  cuvsResourcesDestroy(h->res);
+  if (h->s_search) hipStreamDestroy(h->s_search);
+  if (h->s_copy) hipStreamDestroy(h->s_copy);
+  h->res = NULL; h->s_search = NULL; h->s_copy = NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -652,6 +763,7 @@ static void* snap_read(const char* filename, long n, long dim)
     set_tensor_f32(&gt, hg, kDLCPU, 32, n, (long)hk, gs);
     gt.dl_tensor.dtype.code = kDLUInt;
     set_tensor_f32(&dt, hd, kDLCPU, (int)u32bits, n, dim, ds);
+    vt_step(54);
     if (cuvsCagraIndexFromArgs(h->res, L2Expanded, &gt, &dt, h->idx) != CUVS_SUCCESS) {
       fprintf(stderr, "[deser] CAGRA import failed: %s\n", cuvsGetLastErrorText()); goto fail;
     }
@@ -662,12 +774,12 @@ static void* snap_read(const char* filename, long n, long dim)
   if (h->fp16) h2f_all((const uint16_t*)hd, h->host_base, (long)((size_t)n * (size_t)dim));
   else memcpy(h->host_base, hd, (size_t)n * (size_t)dim * sizeof(float));
   free(hg); free(hd);
+  vt_step(55);
+  vt_report("after_deserialize");
   return h;
 fail:
   if (h->idx) cuvsCagraIndexDestroy(h->idx);
-  if (h->res) cuvsResourcesDestroy(h->res);
-  if (h->s_search) hipStreamDestroy(h->s_search);
-  if (h->s_copy) hipStreamDestroy(h->s_copy);
+  sk_res_release(h);
   free(h->host_base); free(h);
   free(hg); free(hd);
   return NULL;
@@ -681,6 +793,8 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   if (!h) return NULL;
   h->n = n; h->dim = dim;
   memdbg(5, "build_entry");
+  vt_start();
+  vt_step(5);
   g_time = env_int("TILED_TIME", 0);
   g_t_half = g_t_h2d = g_t_bfbuild = g_t_gsearch = g_t_wait = g_t_import = 0;
   mem_sampler_start();
@@ -691,6 +805,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   double _t_all = sk_now_ms();
   std::thread copy_thread;
   {
+    vt_step(6);
     h->host_base = (float*)malloc((size_t)n * (size_t)dim * sizeof(float));
     if (!h->host_base) { free(h); return NULL; }
     const float* src = base;
@@ -749,6 +864,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
 
     if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) { free(graph); goto fail; }
     memdbg(22, "import_begin");
+    vt_step(22);
     {
       DLManagedTensor graph_t, base_t;
       long gs[2] = {n, K}, bs[2] = {n, dim};
@@ -777,6 +893,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     h->k = K;
     free(graph);
     memdbg(23, "import_done");
+    vt_step(23);
   }
 
   g_t_total = sk_now_ms() - _t_all;
@@ -795,13 +912,14 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
             (double)g_mem_peak.load() / 1e9, g_mem_peak_phase.load());
   }
   fprintf(stderr, "[host] built n=%ld dim=%ld k=%ld\n", n, dim, h->k);
+  vt_step(24);
+  vt_report("after_build");
   return h;
 fail:
+  vt_report("build_fail");
   join_copy();
   if (h->idx) cuvsCagraIndexDestroy(h->idx);
-  if (h->res) cuvsResourcesDestroy(h->res);
-  if (h->s_search) hipStreamDestroy(h->s_search);
-  if (h->s_copy) hipStreamDestroy(h->s_copy);
+  sk_res_release(h);
   if (env_int("TILED_MEMDBG", 0) == 2) {
     mem_sampler_stop();
     fprintf(stderr, "[memdbg] fullrun peak=%.3f GB at phase=%d\n",
@@ -822,7 +940,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   /* Optional query chunking: CAGRA search workspace grows ~1 MB/query, so
    * capping the batch bounds transient VRAM at a small latency cost. */
   {
-    int qc = env_int("TILED_QUERY_CHUNK", 32);
+    int qc = env_int("TILED_QUERY_CHUNK", 50);
     if (qc > 0 && nq > qc) {
       for (long off = 0; off < nq; off += qc) {
         long m = (nq - off) < qc ? (nq - off) : qc;
@@ -854,6 +972,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   cuvsCagraSearchParams_t sp = NULL;
   double t_search = 0, t_d2h = 0, t_rerank = 0;
   double _t0 = sk_now_ms();
+  vt_step(42);
 
   if (h->fp16) {
     hq_half = (unsigned short*)malloc(qbytes_half);
@@ -889,20 +1008,30 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     sp->search_width = env_int("BF_WIDTH", 32);
     int hm = env_int("TILED_HASHMAP_MODE", -1);
     if (hm >= 0) sp->hashmap_mode = (enum cuvsCagraHashMode)hm;
+    int alg = env_int("TILED_SEARCH_ALGO", -1);
+    if (alg >= 0) sp->algo = (enum cuvsCagraSearchAlgo)alg;
+    int tbs = env_int("TILED_THREAD_BLOCK", 0);
+    if (tbs > 0) sp->thread_block_size = (size_t)tbs;
+    int hmin = env_int("TILED_HASH_MIN_BITS", 0);
+    if (hmin > 0) sp->hashmap_min_bitlen = (size_t)hmin;
     cuvsFilter filter; filter.type = NO_FILTER; filter.addr = (uintptr_t)0;
     memdbg(40, "cagra_search_begin");
+    vt_step(44);
     double _ts = sk_now_ms();
     memdbg(44, "search_before_cagra");
     if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, filter) != CUVS_SUCCESS) { rc = 15; goto done; }
     if (cuvsStreamSync(h->res) != CUVS_SUCCESS) { rc = 15; goto done; }
     t_search = sk_now_ms() - _ts;
     memdbg(45, "cagra_search_end");
+    vt_step(45);
     memdbg(41, "cagra_search_end2");
     if (do_refine) {
+      vt_step(46);
       double _td = sk_now_ms();
       if (cudaMemcpy(h_candidates, dids, (size_t)nq * (size_t)search_k * sizeof(unsigned),
                      cudaMemcpyDeviceToHost) != cudaSuccess) { rc = 16; goto done; }
       t_d2h = sk_now_ms() - _td;
+      vt_step(47);
       double _tr = sk_now_ms();
       /* Deduplicate by sorting candidate ids (thread-local), then exact
        * fp32 AVX2 rerank; queries are independent so fan them out. */
@@ -965,6 +1094,7 @@ done:
   if (dids) cudaFree(dids);
   if (dq) cudaFree(dq);
   if (dq_half) cudaFree(dq_half);
+  vt_step(48);
   free(h_candidates);
   free(ranked);
   free(hq_half);
@@ -973,6 +1103,7 @@ done:
             nq, topk, search_k, t_search, t_d2h, t_rerank,
             (sk_now_ms() - _t0) - (t_search + t_d2h + t_rerank));
   }
+  vt_report("after_search");
   if (rc) fprintf(stderr, "[host] search rc=%d: %s\n", rc, cuvsGetLastErrorText());
   return rc;
 }
@@ -982,10 +1113,9 @@ void seekdb_cuvs_free(void* handle)
 {
   sk_host_index* h = (sk_host_index*)handle;
   if (!h) return;
+  vt_step(60);
   if (h->idx) cuvsCagraIndexDestroy(h->idx);
-  if (h->res) cuvsResourcesDestroy(h->res);
-  if (h->s_search) hipStreamDestroy(h->s_search);
-  if (h->s_copy) hipStreamDestroy(h->s_copy);
+  sk_res_release(h);
   free(h->host_base);
   free(h->stamp);
   free(h);
@@ -995,6 +1125,8 @@ void seekdb_cuvs_free(void* handle)
    * process.  Releasing it is only safe when this bridge owns every index in
    * the process, so it is opt-in. */
   if (env_int("TILED_RMM_RESET_ON_FREE", 0)) cuvsRMMMemoryResourceReset();
+  vt_step(61);
+  vt_report("after_free");
 }
 
 int seekdb_cuvs_serialize(void* handle, const char* filename)
@@ -1003,6 +1135,7 @@ int seekdb_cuvs_serialize(void* handle, const char* filename)
   if (!h || !h->idx || !filename) return 1;
   if (env_int("TILED_SKIP_SERIALIZE", 0)) return 0;
   memdbg(30, "serialize_begin");
+  vt_step(30);
   double _t0 = sk_now_ms();
   int rc;
   if (h->fp16) {
@@ -1015,6 +1148,8 @@ int seekdb_cuvs_serialize(void* handle, const char* filename)
   }
   if (g_time) fprintf(stderr, "[time] serialize %.1f ms\n", sk_now_ms() - _t0);
   memdbg(31, "serialize_done");
+  vt_step(34);
+  vt_report("after_serialize");
   return rc;
 }
 
@@ -1070,12 +1205,11 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
     int64_t gd = 0;
     if (cuvsCagraIndexGetGraphDegree(h->idx, &gd) == CUVS_SUCCESS) h->k = (long)gd;
   }
+  vt_report("after_deserialize");
   return h;
 fail:
   if (h->idx) cuvsCagraIndexDestroy(h->idx);
-  if (h->res) cuvsResourcesDestroy(h->res);
-  if (h->s_search) hipStreamDestroy(h->s_search);
-  if (h->s_copy) hipStreamDestroy(h->s_copy);
+  sk_res_release(h);
   free(h->host_base);
   free(h);
   return NULL;
