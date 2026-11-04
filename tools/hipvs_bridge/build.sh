@@ -1,44 +1,8 @@
 #!/usr/bin/env bash
-
+# Platform build entry: build the host-only cuVS brute-force bridge.
+# The implementation lives in build_host.sh (no -x hip, no --offload-arch,
+# no device code object).  Keeping this wrapper means the platform's
+# tools/hipvs_bridge/build.sh invocation automatically gets the host build.
 set -Eeuo pipefail
-
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-HIPVS_ROOT=${HIPVS_ROOT:-/opt/hipvs}
-ROCM_ROOT=${ROCM_ROOT:-/opt/rocm}
-HIPCC=${HIPCC:-$ROCM_ROOT/bin/hipcc}
-OUTPUT=${1:-$SCRIPT_DIR/libseekdb_cuvs_bridge.so}
-
-[[ -x "$HIPCC" ]] || { echo "hipcc is not executable: $HIPCC" >&2; exit 2; }
-[[ -f "$HIPVS_ROOT/include/cuvs/core/c_api.h" ]] || {
-  echo "hipVS headers are missing under $HIPVS_ROOT/include" >&2
-  exit 2
-}
-[[ -f "$HIPVS_ROOT/lib/libcuvs_c.so" ]] || {
-  echo "libcuvs_c.so is missing under $HIPVS_ROOT/lib" >&2
-  exit 2
-}
-
-mkdir -p "$(dirname "$OUTPUT")"
-
-"$HIPCC" \
-  -shared \
-  -fPIC \
-  -O2 \
-  -std=c++17 \
-  -x hip \
-  --offload-arch=gfx1100 \
-  -D__HIP_PLATFORM_AMD__ \
-  -I"$SCRIPT_DIR" \
-  -I"$HIPVS_ROOT/include" \
-  -I"$HIPVS_ROOT/include/cuvs" \
-  -I"$ROCM_ROOT/include" \
-  "$SCRIPT_DIR/seekdb_cuvs_bridge.c" \
-  -L"$HIPVS_ROOT/lib" \
-  -Wl,-soname,libseekdb_cuvs_bridge.so \
-  -Wl,-rpath,"$HIPVS_ROOT/lib:$ROCM_ROOT/lib" \
-  -lcuvs_c \
-  -lcuvs \
-  -lhipblas \
-  -o "$OUTPUT"
-
-echo "built $OUTPUT"
+exec "$SCRIPT_DIR/build_host.sh" "$@"
