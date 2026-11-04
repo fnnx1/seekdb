@@ -822,7 +822,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   /* Optional query chunking: CAGRA search workspace grows ~1 MB/query, so
    * capping the batch bounds transient VRAM at a small latency cost. */
   {
-    int qc = env_int("TILED_QUERY_CHUNK", 0);
+    int qc = env_int("TILED_QUERY_CHUNK", 32);
     if (qc > 0 && nq > qc) {
       for (long off = 0; off < nq; off += qc) {
         long m = (nq - off) < qc ? (nq - off) : qc;
