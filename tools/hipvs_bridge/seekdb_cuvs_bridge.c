@@ -1627,9 +1627,11 @@ int seekdb_cuvs_serialize(void* handle, const char* filename)
   if (!h || !filename) return 1;
   if (env_int("TILED_SKIP_SERIALIZE", 0)) return 0;
   memdbg(30, "serialize_begin");
-  /* The seekdb snapshot already carries buf_vecs_.  Keep the CAGRA file
-     graph-only by default; set TILED_INCLUDE_DATASET=1 for legacy snapshots. */
-  int incl_ds = env_int("TILED_INCLUDE_DATASET", h->fp16 ? 1 : 0);
+  /* Keep the dataset in the CAGRA file by default.  A full snapshot restores
+     the original CAGRA index (fast query path); a graph-only snapshot must be
+     rebuilt from graph+base and searches noticeably slower.  Set
+     TILED_INCLUDE_DATASET=0 to opt back into the compact graph-only format. */
+  int incl_ds = env_int("TILED_INCLUDE_DATASET", 1);
   double _ts = sk_now_ms();
   if (cuvsCagraSerialize(h->res, filename, h->idx, incl_ds != 0) != CUVS_SUCCESS) {
     fprintf(stderr, "[bf_cagra] serialize failed: %s\n", cuvsGetLastErrorText());
