@@ -753,7 +753,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
       DLManagedTensor graph_t, base_t;
       long gs[2] = {n, K}, bs[2] = {n, dim};
       unsigned short* half_dataset = NULL;
-      int fp16_index = env_int("TILED_FP16_INDEX", 1);
+      int fp16_index = env_int("TILED_FP16_INDEX", 0);
       set_tensor_f32(&graph_t, graph, kDLCPU, 32, n, K, gs);
       graph_t.dl_tensor.dtype.code = kDLUInt;
       if (fp16_index) {
