@@ -177,6 +177,11 @@ static void *ob_cuvs_worker_main(void *) {
     pthread_mutex_unlock(&g_cuvs_worker.mu);
     fn(arg);
     pthread_mutex_lock(&g_cuvs_worker.mu);
+    /* Clear the job before waking the submitter: the worker can reacquire the
+       mutex before the submitter does, and a still-set fn/arg would make it
+       re-run the caller's stack job after the caller returns (UAF). */
+    g_cuvs_worker.fn = nullptr;
+    g_cuvs_worker.arg = nullptr;
     g_cuvs_worker.done = true;
     pthread_cond_broadcast(&g_cuvs_worker.cv);
     pthread_mutex_unlock(&g_cuvs_worker.mu);
@@ -206,8 +211,6 @@ static bool ob_cuvs_worker_run(void (*fn)(void *), void *arg) {
   while (!g_cuvs_worker.done) {
     pthread_cond_wait(&g_cuvs_worker.cv, &g_cuvs_worker.mu);
   }
-  g_cuvs_worker.fn = nullptr;
-  g_cuvs_worker.arg = nullptr;
   pthread_mutex_unlock(&g_cuvs_worker.mu);
   pthread_mutex_unlock(&g_cuvs_worker.submit_mu);
   return true;
