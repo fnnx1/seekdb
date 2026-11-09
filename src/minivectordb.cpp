@@ -599,6 +599,7 @@ struct Stmt {
     DROP_INDEX,
     DROP_TABLE,
     SHOW_TABLES,
+    DESCRIBE_TABLE,
     TRUNCATE,
     OTHER
   } kind = OTHER;
@@ -775,6 +776,11 @@ class Parser {
       st.kind = Stmt::ROLLBACK;
       return st;
     }
+    if (match_kw("DESCRIBE") || match_kw("DESC")) {
+      st.kind = Stmt::DESCRIBE_TABLE;
+      st.table = ident();
+      return st;
+    }
     if (match_kw("SHOW")) {
       if (match_kw("TABLES")) {
         st.kind = Stmt::SHOW_TABLES;
@@ -783,6 +789,12 @@ class Parser {
           st.like = tok_.text;
           adv();
         }
+        return st;
+      }
+      if (match_kw("COLUMNS")) {
+        expect_kw("FROM");
+        st.kind = Stmt::DESCRIBE_TABLE;
+        st.table = ident();
         return st;
       }
       throw syntax("unsupported SHOW statement");
@@ -1241,6 +1253,30 @@ class DB {
       case Stmt::ROLLBACK: {
         if (in_tx_) rollback_tx();
         out = ok(0);
+        break;
+      }
+      case Stmt::DESCRIBE_TABLE: {
+        Table &t = table(st.table);
+        out = "Field\tType\tNull\tKey\tDefault\tExtra\n";
+        for (size_t i = 0; i < t.cols.size(); ++i) {
+          const Column &c = t.cols[i];
+          std::string type;
+          if (c.type == VT_BIGINT) type = "bigint";
+          else if (c.type == VT_VARCHAR) type = "varchar(" + std::to_string(c.len) + ")";
+          else if (c.type == VT_VECTOR) type = "vector(" + std::to_string(c.len) + ")";
+          else type = "unknown";
+          out += c.name;
+          out += "\t";
+          out += type;
+          out += "\t";
+          out += ((int)i == t.pk) ? "NO" : "YES";
+          out += "\t";
+          out += ((int)i == t.pk) ? "PRI" : "";
+          out += "\t";
+          out += "NULL";
+          out += "\t";
+          out.push_back('\n');
+        }
         break;
       }
       case Stmt::SHOW_TABLES: {

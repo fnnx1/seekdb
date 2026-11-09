@@ -188,6 +188,21 @@ def test_errors_schema():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_describe():
+    d = fresh()
+    try:
+        run("CREATE TABLE t (id BIGINT PRIMARY KEY, name VARCHAR(5), v VECTOR(2));", d)
+        expected = ["Field\tType\tNull\tKey\tDefault\tExtra",
+                    "id\tbigint\tNO\tPRI\tNULL\t",
+                    "name\tvarchar(5)\tYES\t\tNULL\t",
+                    "v\tvector(2)\tYES\t\tNULL\t"]
+        assert sel("DESCRIBE t;", d) == expected, sel("DESCRIBE t;", d)
+        assert sel("DESC t;", d) == expected
+        assert sel("SHOW COLUMNS FROM t;", d) == expected
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_update_delete_order_limit():
     d = fresh()
     try:
