@@ -5,7 +5,7 @@
     "status": "draft",
     "synthetic": false,
     "language": "zh-CN",
-    "notes": "This is a working draft. Student-owned explanations and verification must be added before submission; agent-generated code and logs are context, not proof of student understanding."
+    "notes": "Working draft. The user must add their own explanations, retests and reflections; agent-owned experiments are context and do not prove student understanding."
   },
   "user_prompts": [
     {
@@ -82,6 +82,42 @@
       "output": "uncommitted row absent; committed auto-commit row present; committed explicit transaction row present.",
       "student_interpretation": "",
       "status": "observed"
+    },
+    {
+      "id": "e4",
+      "owner": "agent",
+      "hypothesis": "Exact L2 TopK can be made much faster without changing results.",
+      "command": "10K x 128D, 1000 exact top-10 queries; before/after bounded selection",
+      "output": "20.95s -> 0.71s; top-10 unchanged.",
+      "student_interpretation": "",
+      "status": "observed"
+    },
+    {
+      "id": "e5",
+      "owner": "agent",
+      "hypothesis": "Off-heap vector payloads reduce peak RSS for data larger than memory.",
+      "command": "1M/2M x 128D load, TopK, restart; measure peak RSS and data dir",
+      "output": "1M: 375.7MB insert / 369MB restart / 526MB data; 2M: 677.1MB insert / 1052MB data / 34.6s.",
+      "student_interpretation": "",
+      "status": "observed"
+    },
+    {
+      "id": "e6",
+      "owner": "agent",
+      "hypothesis": "Vector-store recovery must preserve committed and discard uncommitted changes after SIGKILL.",
+      "command": "SIGKILL after committed/uncommitted vector INSERT and UPDATE; restart and query",
+      "output": "committed rows/vectors kept; uncommitted rows/updates absent; old vector kept after uncommitted update.",
+      "student_interpretation": "",
+      "status": "observed"
+    },
+    {
+      "id": "e7",
+      "owner": "agent",
+      "hypothesis": "The submitted image and local checks cover build, protocol, SQL, vector, transaction and recovery paths.",
+      "command": "RUN_DOCKER=1 ./scripts/check.sh",
+      "output": "clean build; 11 dynamic tests; 100K large-data test; 7 protocol tests; ASan/UBSan; docker build/run/restart all pass.",
+      "student_interpretation": "",
+      "status": "observed"
     }
   ],
   "retrospective": [
@@ -92,9 +128,37 @@
     }
   ],
   "limitations": [
-    "学生自己的解释、复测和反思尚未写入；当前 experiments 的 owner 为 agent，不能作为学生理解证据。",
+    "学生本人的解释、复测和反思尚未写入；当前 experiments 的 owner 为 agent，不能作为学生理解证据。",
     "正式题包/测试驱动尚未发布，stdin/stdout 的精确输出格式和错误码仍需与题包或平台预检对齐。",
-    "行存仍在内存中，隐藏测试若超过内存限制需要改为磁盘后备存储。",
-    "近似索引未实现；exact 检索可满足 Recall@10，但 ANN 性能榜可能偏低。"
+    "行元数据仍在内存；1M/2M 已实测，更大数据仍可能受内存限制。",
+    "近似索引未实现；exact 检索满足 Recall@10，但 ANN 性能榜可能偏低。",
+    "WAL 记录 SQL 文本，大规模写入时 WAL 可能达到 GB 级；快照与 WAL 在磁盘上各占一份。"
+  ],
+  "student_evidence_pending": [
+    {
+      "dimension": "问题理解与自主拆解",
+      "prompt": "用自己的话说明 MiniVectorDB 必须自己实现哪几层、为什么不能直接套 SQLite/RocksDB/Faiss；给出一个你主动拆解的子问题。",
+      "status": "pending"
+    },
+    {
+      "dimension": "技术理解与迁移",
+      "prompt": "解释 WAL+快照、undo 回滚和 L2 TopK 的取舍，并说明如果数据超过内存你会怎么改。",
+      "status": "pending"
+    },
+    {
+      "dimension": "独立验证与质疑",
+      "prompt": "挑一个 agent 给出的结论，设计并执行一个能证伪它的测试，记录实际输出；说明你是否推翻/修正了它。",
+      "status": "pending"
+    },
+    {
+      "dimension": "实验与反馈迭代",
+      "prompt": "记录一次失败/回归、你如何定位、修正后复测结果。",
+      "status": "pending"
+    },
+    {
+      "dimension": "取舍与反思",
+      "prompt": "总结性能、内存、磁盘、实现复杂度之间的取舍，以及下次会怎么做。",
+      "status": "pending"
+    }
   ]
 }

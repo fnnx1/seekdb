@@ -1958,7 +1958,7 @@ class DB {
           keep = (size_t)std::min<uint64_t>(want, cands.size());
         }
         if (keep < cands.size()) {
-          std::nth_element(cands.begin(), cands.begin() + keep, cands.end(), cmp);
+          std::nth_element(cands.begin(), cands.begin() + (std::ptrdiff_t)keep, cands.end(), cmp);
           cands.resize(keep);
         }
         std::sort(cands.begin(), cands.end(), cmp);
