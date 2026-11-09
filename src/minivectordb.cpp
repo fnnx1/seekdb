@@ -1835,6 +1835,32 @@ class DB {
     return (int64_t)newrows.size();
   }
 
+  bool value_equal(const Table &t, const Value &a, const Value &b) {
+    if (a.type != b.type) return false;
+    if (a.type == VT_BIGINT) return a.i == b.i;
+    if (a.type == VT_DOUBLE) return a.d == b.d;
+    if (a.type == VT_VARCHAR) return a.s == b.s;
+    if (a.type == VT_VECTOR) {
+      size_t na = a.vdisk ? (size_t)a.vlen : a.v.size();
+      size_t nb = b.vdisk ? (size_t)b.vlen : b.v.size();
+      if (na != nb) return false;
+      std::vector<float> sa, sb;
+      const float *pa = t.vecs.get(a, sa);
+      const float *pb = t.vecs.get(b, sb);
+      for (size_t i = 0; i < na; ++i)
+        if (pa[i] != pb[i]) return false;
+      return true;
+    }
+    return false;
+  }
+
+  bool row_equal(const Table &t, const Row &a, const Row &b) {
+    if (a.vals.size() != b.vals.size()) return false;
+    for (size_t i = 0; i < a.vals.size(); ++i)
+      if (!value_equal(t, a.vals[i], b.vals[i])) return false;
+    return true;
+  }
+
   int64_t update_rows(const Stmt &st, const std::string &raw, bool recovering) {
     Table &t = table(st.table);
     std::vector<std::pair<int, ExprP>> assigns;
@@ -1867,6 +1893,9 @@ class DB {
       }
       news.push_back(std::move(nr));
     }
+    int64_t changed = 0;
+    for (size_t i = 0; i < hits.size(); ++i)
+      if (!row_equal(t, t.rows[hits[i]], news[i])) ++changed;
     if (!in_tx_ && !recovering) wal_commit_one(raw);
     for (size_t i = 0; i < hits.size(); ++i) {
       size_t idx = hits[i];
@@ -1875,7 +1904,7 @@ class DB {
       t.rows[idx] = std::move(news[i]);
     }
     if (in_tx_) tx_sql_.push_back(raw);
-    return (int64_t)hits.size();
+    return changed;
   }
 
   int64_t delete_rows(const Stmt &st, const std::string &raw, bool recovering) {

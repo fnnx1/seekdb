@@ -188,6 +188,20 @@ def test_errors_schema():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_update_affected_rows():
+    d = fresh()
+    try:
+        run("CREATE TABLE t (id BIGINT PRIMARY KEY, name VARCHAR(10), v VECTOR(2));"
+            "INSERT INTO t VALUES (1,'a','[1,2]');", d)
+        assert "Query OK, 0 rows affected" in run("UPDATE t SET name='a' WHERE id=1;", d)
+        assert "Query OK, 0 rows affected" in run("UPDATE t SET v='[1,2]' WHERE id=1;", d)
+        assert "Query OK, 1 row affected" in run("UPDATE t SET name='b' WHERE id=1;", d)
+        assert "Query OK, 0 rows affected" in run("UPDATE t SET name='b' WHERE id=1;", d)
+        assert "Query OK, 1 row affected" in run("DELETE FROM t WHERE id=1;", d)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_show_tables_and_truncate():
     d = fresh()
     try:
