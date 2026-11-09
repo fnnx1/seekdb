@@ -489,6 +489,15 @@ class Parser {
     Stmt st;
     if (tok_.kind == Token::END) return st;
     if (match_kw("CREATE")) {
+      if (match_kw("DATABASE")) {
+        if (match_kw("IF")) {
+          expect_kw("NOT");
+          expect_kw("EXISTS");
+        }
+        ident();
+        st.kind = Stmt::OTHER;
+        return st;
+      }
       if (match_kw("TABLE")) return parse_create_table();
       if (match_kw("VECTOR")) {
         expect_kw("INDEX");
@@ -514,6 +523,12 @@ class Parser {
       throw syntax("unsupported CREATE statement");
     }
     if (match_kw("DROP")) {
+      if (match_kw("DATABASE")) {
+        if (match_kw("IF")) expect_kw("EXISTS");
+        ident();
+        st.kind = Stmt::OTHER;
+        return st;
+      }
       expect_kw("TABLE");
       st.kind = Stmt::DROP_TABLE;
       if (match_kw("IF")) {
@@ -694,18 +709,19 @@ class Parser {
         st.items.push_back(std::move(it));
       } while (match_sym(","));
     }
-    expect_kw("FROM");
-    st.table = ident();
-    if (match_kw("WHERE")) st.where = parse_expr();
-    if (match_kw("ORDER")) {
-      expect_kw("BY");
-      do {
-        OrderItem oi;
-        oi.expr = parse_expr();
-        if (match_kw("DESC")) oi.asc = false;
-        else match_kw("ASC");
-        st.order.push_back(std::move(oi));
-      } while (match_sym(","));
+    if (match_kw("FROM")) {
+      st.table = ident();
+      if (match_kw("WHERE")) st.where = parse_expr();
+      if (match_kw("ORDER")) {
+        expect_kw("BY");
+        do {
+          OrderItem oi;
+          oi.expr = parse_expr();
+          if (match_kw("DESC")) oi.asc = false;
+          else match_kw("ASC");
+          st.order.push_back(std::move(oi));
+        } while (match_sym(","));
+      }
     }
     if (match_kw("LIMIT")) {
       int64_t a = int_lit();
@@ -1631,6 +1647,33 @@ class DB {
 
   // ---- SELECT --------------------------------------------------------------
   std::string select_rows(const Stmt &st) {
+    if (st.table.empty()) {
+      // Constant SELECT without FROM (e.g. SELECT 1;), used by drivers as a
+      // readiness probe.
+      std::vector<std::string> headers;
+      std::vector<Value> vals;
+      for (const auto &it : st.items) {
+        if (it.expr->kind == Expr::COL || it.expr->kind == Expr::L2)
+          throw SqlError(1054, "42S22", "Unknown column in SELECT without FROM");
+        vals.push_back(eval(it.expr, Table{}, Row{}));
+        if (!it.alias.empty()) headers.push_back(it.alias);
+        else if (it.expr->kind == Expr::LIT) headers.push_back(fmt_value(it.expr->lit));
+        else headers.push_back("expr");
+      }
+      std::string out;
+      for (size_t i = 0; i < headers.size(); ++i) {
+        if (i) out.push_back('\t');
+        out += headers[i];
+      }
+      out.push_back('\n');
+      if (st.limit == 0) return out;
+      for (size_t i = 0; i < vals.size(); ++i) {
+        if (i) out.push_back('\t');
+        out += fmt_value(vals[i]);
+      }
+      out.push_back('\n');
+      return out;
+    }
     Table &t = table(st.table);
     std::vector<size_t> matches;
     matches.reserve(t.rows.size());
