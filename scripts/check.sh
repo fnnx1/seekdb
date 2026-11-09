@@ -26,6 +26,18 @@ g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
     -o "$SAN_BIN" src/minivectordb.cpp
 MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/test_minivector.py
 
+echo "== optional clang-tidy =="
+if [[ "${RUN_TIDY:-0}" == "1" ]]; then
+  if command -v clang-tidy >/dev/null 2>&1; then
+    TIDY_OUT="$(mktemp /tmp/minivectordb-tidy.XXXXXX)"
+    clang-tidy src/minivectordb.cpp --checks='-*,clang-analyzer-*,bugprone-*' -- -std=c++17 2>&1 | tee "$TIDY_OUT"
+    if grep -q 'error:' "$TIDY_OUT"; then rm -f "$TIDY_OUT"; exit 1; fi
+    rm -f "$TIDY_OUT"
+  else
+    echo "clang-tidy not found; skipped"
+  fi
+fi
+
 echo "== whitespace/static check =="
 git diff --check
 git diff --cached --check

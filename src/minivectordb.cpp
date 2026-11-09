@@ -65,8 +65,8 @@ static bool starts_with_ci(const std::string &s, const char *p) {
 struct SqlError : std::runtime_error {
   int code;
   std::string state;
-  SqlError(int c, std::string st, std::string msg)
-      : std::runtime_error(std::move(msg)), code(c), state(std::move(st)) {}
+  SqlError(int c, std::string st, const std::string &msg)
+      : std::runtime_error(msg), code(c), state(std::move(st)) {}
 };
 
 static SqlError syntax(const std::string &m) { return SqlError(1064, "42000", m); }
@@ -332,7 +332,7 @@ static std::string fmt_vector(const std::vector<float> &v) {
   std::string r = "[";
   char b[64];
   for (size_t i = 0; i < v.size(); ++i) {
-    if (i) r += ",";
+    if (i) r.push_back(',');
     if (!std::isfinite(v[i])) {
       r += "nan";
     } else {
@@ -340,7 +340,7 @@ static std::string fmt_vector(const std::vector<float> &v) {
       r += b;
     }
   }
-  r += "]";
+  r.push_back(']');
   return r;
 }
 
