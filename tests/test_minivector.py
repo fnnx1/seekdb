@@ -188,6 +188,18 @@ def test_errors_schema():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_like_filter():
+    d = fresh()
+    try:
+        run("CREATE TABLE t (id BIGINT PRIMARY KEY, name VARCHAR(20));"
+            "INSERT INTO t VALUES (1,'alpha'),(2,'beta'),(3,'alps'),(4,'a_b');", d)
+        assert sel("SELECT id FROM t WHERE name LIKE 'a%' ORDER BY id;", d) == ["id", "1", "3", "4"]
+        assert sel("SELECT id FROM t WHERE name LIKE 'a_p%' ORDER BY id;", d) == ["id", "1", "3"]
+        assert sel("SELECT id FROM t WHERE id > 1 AND name LIKE '%a' ORDER BY id;", d) == ["id", "2"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_update_affected_rows():
     d = fresh()
     try:

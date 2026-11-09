@@ -989,6 +989,14 @@ class Parser {
 
   ExprP parse_cmp() {
     ExprP a = parse_primary();
+    if (match_kw("LIKE")) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::CMP;
+      e->name = "LIKE";
+      e->a = a;
+      e->b = parse_primary();
+      return e;
+    }
     if (tok_.kind == Token::SYMBOL &&
         (tok_.text == "=" || tok_.text == "<>" || tok_.text == "!=" ||
          tok_.text == "<" || tok_.text == "<=" || tok_.text == ">" ||
@@ -1393,6 +1401,14 @@ class DB {
       }
       case Expr::CMP: {
         Value a = eval(e->a, t, r), b = eval(e->b, t, r);
+        if (e->name == "LIKE") {
+          Value out;
+          out.type = VT_BIGINT;
+          out.i = (a.type == VT_VARCHAR && b.type == VT_VARCHAR)
+                      ? (like_match(a.s, b.s) ? 1 : 0)
+                      : 0;
+          return out;
+        }
         int c = value_cmp(a, b);
         int tv = 0;
         if (e->name == "=") tv = (c == 0);
