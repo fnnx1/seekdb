@@ -1,0 +1,100 @@
+{
+  "meta": {
+    "question_id": 600081,
+    "question": "轻量向量数据库（MiniVectorDB）",
+    "status": "draft",
+    "synthetic": false,
+    "language": "zh-CN",
+    "notes": "This is a working draft. Student-owned explanations and verification must be added before submission; agent-generated code and logs are context, not proof of student understanding."
+  },
+  "user_prompts": [
+    {
+      "id": "u1",
+      "content": "这里出现了加赛榜单，但我没有找到加赛题目",
+      "context": "加赛榜已出现，但题目入口不明确；学生先定位题目和发布状态。"
+    },
+    {
+      "id": "u2",
+      "content": "题目能打开了，帮我完成加赛题目",
+      "context": "题目页开放后，学生决定开始做题并请求协作。"
+    },
+    {
+      "id": "u3",
+      "content": "赛题需要的学习记录是怎么样的？",
+      "context": "学生主动确认 Agent Prompt 学习材料的格式与评分要求。"
+    },
+    {
+      "id": "u4",
+      "content": "注意提测次数只有每日两次，把“每次提交前都应该先经过非常完善的静态检查与动态测试”写入goal",
+      "context": "学生识别到每日仅 2 次正式提测的硬约束，并主动建立提交前的验证纪律。"
+    },
+    {
+      "id": "u5",
+      "content": "这个题目似乎本来就要求独立完成？现在的环境可能已经是完整题目，确认一下。",
+      "context": "学生质疑“题包未发布=不能开始”的假设，要求确认独立实现要求和环境完整性。"
+    },
+    {
+      "id": "u6",
+      "content": "开始继续完成goal",
+      "context": "学生确认继续执行长期目标。"
+    }
+  ],
+  "conversations": [
+    {
+      "id": "c1",
+      "role": "student",
+      "source": "user",
+      "content": "每日两次提测 + 提交前必须完成完善的静态检查和动态测试。",
+      "interpretation": "把有限提测次数当作稀缺资源，先用本地验证降低正式评测失败风险。"
+    },
+    {
+      "id": "c2",
+      "role": "student",
+      "source": "user",
+      "content": "独立完成判断：题目要求自行实现存储、查询、索引和事务核心；分支只是空骨架。",
+      "interpretation": "学生要求区分“题目说明完整”和“测试题包完整”，避免把空骨架当成可直接运行的工程。"
+    }
+  ],
+  "experiments": [
+    {
+      "id": "e1",
+      "owner": "agent",
+      "hypothesis": "官方加赛题包可能已随题目说明发布。",
+      "command": "curl https://oceanbase.yuque.com/api/docs/lg8enxlmwg69unt6?book_id=81051108",
+      "output": "content_updated_at=2026-11-09T03:34:43Z; 文档明确测试驱动/题包由组织方另行提供; 2026-competition-round2 分支 commit c842a36 仅含空 Dockerfile/conversation.json。",
+      "student_interpretation": "",
+      "status": "observed"
+    },
+    {
+      "id": "e2",
+      "owner": "agent",
+      "hypothesis": "按题目说明实现的 MiniVectorDB 能通过基础 SQL、向量 TopK、事务、重启与崩溃恢复。",
+      "command": "make && python3 tests/test_minivector.py",
+      "output": "PASS test_basic_vector_ties; PASS test_filtered_ties; PASS test_tx; PASS test_restart; PASS test_crash; PASS test_close_rollback; PASS test_errors_schema; PASS test_if_exists_index; PASS test_performance_smoke; ALL TESTS PASSED (9)",
+      "student_interpretation": "",
+      "status": "observed"
+    },
+    {
+      "id": "e3",
+      "owner": "agent",
+      "hypothesis": "强制终止后已提交数据不丢、未提交事务不部分生效。",
+      "command": "SIGKILL after BEGIN; INSERT / after INSERT; after BEGIN; INSERT; COMMIT; then restart and SELECT",
+      "output": "uncommitted row absent; committed auto-commit row present; committed explicit transaction row present.",
+      "student_interpretation": "",
+      "status": "observed"
+    }
+  ],
+  "retrospective": [
+    {
+      "id": "r1",
+      "owner": "agent",
+      "content": "先确认题目/题包/分支的真实状态，再实现；每日两次提测约束要求在提交前完成构建、协议、SQL、向量、事务、恢复和回归测试。"
+    }
+  ],
+  "limitations": [
+    "学生自己的解释、复测和反思尚未写入；当前 experiments 的 owner 为 agent，不能作为学生理解证据。",
+    "正式题包/测试驱动尚未发布，stdin/stdout 的精确输出格式和错误码仍需与题包或平台预检对齐。",
+    "行存仍在内存中，隐藏测试若超过内存限制需要改为磁盘后备存储。",
+    "近似索引未实现；exact 检索可满足 Recall@10，但 ANN 性能榜可能偏低。"
+  ]
+}

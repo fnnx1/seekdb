@@ -1,0 +1,1841 @@
+// MiniVectorDB — OceanBase 2026 database competition playoff (question 600081).
+// Single-process, single-client, stdin/stdout SQL engine with exact L2 TopK,
+// simple transactions, /data persistence and crash recovery.
+//
+// The engine is intentionally self-contained: the SQL parser, row store,
+// vector search and transaction/WAL layers are implemented here.  Only the
+// C++ standard library is used.
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <csignal>
+#include <cfloat>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <memory>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+// ---------------------------------------------------------------------------
+// Small utilities
+// ---------------------------------------------------------------------------
+static std::string trim(const std::string &s) {
+  size_t a = 0, b = s.size();
+  while (a < b && std::isspace((unsigned char)s[a])) ++a;
+  while (b > a && std::isspace((unsigned char)s[b - 1])) --b;
+  return s.substr(a, b - a);
+}
+
+static std::string upper(std::string s) {
+  for (char &c : s) c = (char)std::toupper((unsigned char)c);
+  return s;
+}
+
+static bool ieq(const std::string &a, const char *b) { return upper(a) == upper(std::string(b)); }
+
+static bool starts_with_ci(const std::string &s, const char *p) {
+  size_t n = std::strlen(p);
+  if (s.size() < n) return false;
+  for (size_t i = 0; i < n; ++i)
+    if (std::toupper((unsigned char)s[i]) != std::toupper((unsigned char)p[i]))
+      return false;
+  return true;
+}
+
+struct SqlError : std::runtime_error {
+  int code;
+  std::string state;
+  SqlError(int c, std::string st, std::string msg)
+      : std::runtime_error(std::move(msg)), code(c), state(std::move(st)) {}
+};
+
+static SqlError syntax(const std::string &m) { return SqlError(1064, "42000", m); }
+
+// CRC32 (IEEE) over arbitrary byte ranges.
+static uint32_t crc32_update(uint32_t crc, const void *data, size_t n) {
+  static uint32_t table[256];
+  static bool init = false;
+  if (!init) {
+    for (uint32_t i = 0; i < 256; ++i) {
+      uint32_t c = i;
+      for (int k = 0; k < 8; ++k) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+      table[i] = c;
+    }
+    init = true;
+  }
+  const uint8_t *p = (const uint8_t *)data;
+  for (size_t i = 0; i < n; ++i) crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+  return crc;
+}
+
+// Binary file helpers (little-endian host is assumed; the evaluation is x86_64).
+static bool put_bytes(FILE *f, const void *p, size_t n) {
+  return n == 0 || std::fwrite(p, 1, n, f) == n;
+}
+static bool get_bytes(FILE *f, void *p, size_t n) {
+  return n == 0 || std::fread(p, 1, n, f) == n;
+}
+static bool put_u32(FILE *f, uint32_t v) { return put_bytes(f, &v, 4); }
+static bool put_u64(FILE *f, uint64_t v) { return put_bytes(f, &v, 8); }
+static bool put_i32(FILE *f, int32_t v) { return put_bytes(f, &v, 4); }
+static bool put_u8(FILE *f, uint8_t v) { return put_bytes(f, &v, 1); }
+static bool get_u32(FILE *f, uint32_t &v) { return get_bytes(f, &v, 4); }
+static bool get_u64(FILE *f, uint64_t &v) { return get_bytes(f, &v, 8); }
+static bool get_i32(FILE *f, int32_t &v) { return get_bytes(f, &v, 4); }
+static bool get_u8(FILE *f, uint8_t &v) { return get_bytes(f, &v, 1); }
+
+static bool put_str(FILE *f, const std::string &s) {
+  if (s.size() > 0xFFFFFFFFu) return false;
+  return put_u32(f, (uint32_t)s.size()) && put_bytes(f, s.data(), s.size());
+}
+static bool get_str(FILE *f, std::string &s) {
+  uint32_t n = 0;
+  if (!get_u32(f, n) || n > 64u * 1024u * 1024u) return false;
+  s.resize(n);
+  return get_bytes(f, n ? &s[0] : nullptr, n);
+}
+
+static void fsync_dir(const std::string &dir) {
+  int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+  if (fd >= 0) {
+    ::fsync(fd);
+    ::close(fd);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Values, rows and tables
+// ---------------------------------------------------------------------------
+enum ValueType { VT_BIGINT = 0, VT_VARCHAR = 1, VT_VECTOR = 2, VT_DOUBLE = 3 };
+
+struct Value {
+  int type = VT_BIGINT;
+  int64_t i = 0;
+  double d = 0.0;
+  std::string s;
+  std::vector<float> v;
+};
+
+struct Column {
+  std::string name;
+  int type = VT_BIGINT;
+  int len = 0;  // varchar char limit or vector dimension
+};
+
+struct Row {
+  std::vector<Value> vals;
+  bool deleted = false;
+};
+
+struct Table {
+  std::string name;
+  std::vector<Column> cols;
+  int pk = -1;
+  int vec = -1;
+  std::vector<Row> rows;
+  std::unordered_map<int64_t, size_t> pkmap;
+};
+
+static std::string fmt_double(double d) {
+  if (!std::isfinite(d)) return "NULL";
+  char b[96];
+  std::snprintf(b, sizeof(b), "%.6f", d);
+  return b;
+}
+
+static std::string fmt_vector(const std::vector<float> &v) {
+  std::string r = "[";
+  char b[64];
+  for (size_t i = 0; i < v.size(); ++i) {
+    if (i) r += ",";
+    if (!std::isfinite(v[i])) {
+      r += "nan";
+    } else {
+      std::snprintf(b, sizeof(b), "%.7g", (double)v[i]);
+      r += b;
+    }
+  }
+  r += "]";
+  return r;
+}
+
+static std::string fmt_value(const Value &v) {
+  switch (v.type) {
+    case VT_BIGINT:
+      return std::to_string(v.i);
+    case VT_VARCHAR:
+      return v.s;
+    case VT_VECTOR:
+      return fmt_vector(v.v);
+    case VT_DOUBLE:
+      return fmt_double(v.d);
+    default:
+      return "";
+  }
+}
+
+// Count Unicode codepoints in a valid UTF-8 string.  Invalid bytes count as one.
+static size_t utf8_len(const std::string &s) {
+  size_t n = 0;
+  for (size_t i = 0; i < s.size();) {
+    unsigned char c = (unsigned char)s[i];
+    size_t step = 1;
+    if ((c & 0x80) == 0) step = 1;
+    else if ((c & 0xE0) == 0xC0) step = 2;
+    else if ((c & 0xF0) == 0xE0) step = 3;
+    else if ((c & 0xF8) == 0xF0) step = 4;
+    if (i + step > s.size()) step = 1;
+    i += step;
+    ++n;
+  }
+  return n;
+}
+
+static bool parse_vector_string(const std::string &text, std::vector<float> &out,
+                                std::string &err) {
+  std::string s = trim(text);
+  if (s.size() < 2 || s.front() != '[' || s.back() != ']') {
+    err = "vector literal must be [v1,v2,...]";
+    return false;
+  }
+  out.clear();
+  size_t i = 1;
+  while (i + 1 < s.size()) {
+    while (i + 1 < s.size() && (std::isspace((unsigned char)s[i]) || s[i] == ',')) ++i;
+    if (i + 1 >= s.size()) break;
+    char *end = nullptr;
+    errno = 0;
+    double d = std::strtod(s.c_str() + i, &end);
+    if (end == s.c_str() + i || errno == ERANGE) {
+      err = "invalid vector component";
+      return false;
+    }
+    if (!std::isfinite(d) || std::fabs(d) > FLT_MAX) {
+      err = "vector component is not a finite float32";
+      return false;
+    }
+    out.push_back((float)d);
+    i = (size_t)(end - s.c_str());
+    while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
+    if (i < s.size() && s[i] == ',') ++i;
+  }
+  return true;
+}
+
+static int value_cmp(const Value &a, const Value &b) {
+  if ((a.type == VT_BIGINT || a.type == VT_DOUBLE) &&
+      (b.type == VT_BIGINT || b.type == VT_DOUBLE)) {
+    double x = a.type == VT_BIGINT ? (double)a.i : a.d;
+    double y = b.type == VT_BIGINT ? (double)b.i : b.d;
+    if (x < y) return -1;
+    if (x > y) return 1;
+    return 0;
+  }
+  if (a.type == VT_VARCHAR && b.type == VT_VARCHAR) {
+    if (a.s < b.s) return -1;
+    if (a.s > b.s) return 1;
+    return 0;
+  }
+  std::string x = fmt_value(a), y = fmt_value(b);
+  if (x < y) return -1;
+  if (x > y) return 1;
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Lexer
+// ---------------------------------------------------------------------------
+struct Token {
+  enum Kind { IDENT, NUMBER, STRING, SYMBOL, END } kind = END;
+  std::string text;
+};
+
+class Lexer {
+ public:
+  explicit Lexer(const std::string &s) : s_(s) {}
+
+  Token next() {
+    skip();
+    if (i_ >= s_.size()) return {Token::END, ""};
+    char c = s_[i_];
+    if (std::isalpha((unsigned char)c) || c == '_') {
+      size_t b = i_;
+      while (i_ < s_.size() &&
+             (std::isalnum((unsigned char)s_[i_]) || s_[i_] == '_' || s_[i_] == '$'))
+        ++i_;
+      return {Token::IDENT, s_.substr(b, i_ - b)};
+    }
+    if (std::isdigit((unsigned char)c) ||
+        (c == '.' && i_ + 1 < s_.size() && std::isdigit((unsigned char)s_[i_ + 1]))) {
+      size_t b = i_;
+      bool dot = false, exp = false;
+      while (i_ < s_.size()) {
+        char x = s_[i_];
+        if (std::isdigit((unsigned char)x)) {
+          ++i_;
+        } else if (x == '.' && !dot && !exp) {
+          dot = true;
+          ++i_;
+        } else if ((x == 'e' || x == 'E') && !exp) {
+          exp = true;
+          ++i_;
+          if (i_ < s_.size() && (s_[i_] == '+' || s_[i_] == '-')) ++i_;
+        } else {
+          break;
+        }
+      }
+      return {Token::NUMBER, s_.substr(b, i_ - b)};
+    }
+    if (c == '\'' || c == '"' || c == '`') {
+      char q = c;
+      ++i_;
+      std::string out;
+      while (i_ < s_.size()) {
+        char x = s_[i_++];
+        if (x == '\\' && q != '`' && i_ < s_.size()) {
+          char e = s_[i_++];
+          switch (e) {
+            case 'n': out.push_back('\n'); break;
+            case 't': out.push_back('\t'); break;
+            case 'r': out.push_back('\r'); break;
+            case '0': out.push_back('\0'); break;
+            default: out.push_back(e); break;
+          }
+          continue;
+        }
+        if (x == q) {
+          if (i_ < s_.size() && s_[i_] == q) {
+            out.push_back(q);
+            ++i_;
+            continue;
+          }
+          break;
+        }
+        out.push_back(x);
+      }
+      return {q == '`' ? Token::IDENT : Token::STRING, out};
+    }
+    // multi-character symbols
+    if (i_ + 1 < s_.size()) {
+      std::string two = s_.substr(i_, 2);
+      if (two == "<=" || two == ">=" || two == "<>" || two == "!=") {
+        i_ += 2;
+        return {Token::SYMBOL, two};
+      }
+    }
+    ++i_;
+    return {Token::SYMBOL, std::string(1, c)};
+  }
+
+ private:
+  void skip() {
+    for (;;) {
+      while (i_ < s_.size() && std::isspace((unsigned char)s_[i_])) ++i_;
+      if (i_ + 1 < s_.size() && s_[i_] == '-' && s_[i_ + 1] == '-' &&
+          (i_ + 2 >= s_.size() || std::isspace((unsigned char)s_[i_ + 2]))) {
+        while (i_ < s_.size() && s_[i_] != '\n') ++i_;
+        continue;
+      }
+      if (i_ < s_.size() && s_[i_] == '#') {
+        while (i_ < s_.size() && s_[i_] != '\n') ++i_;
+        continue;
+      }
+      if (i_ + 1 < s_.size() && s_[i_] == '/' && s_[i_ + 1] == '*') {
+        i_ += 2;
+        while (i_ + 1 < s_.size() && !(s_[i_] == '*' && s_[i_ + 1] == '/')) ++i_;
+        if (i_ + 1 < s_.size()) i_ += 2;
+        continue;
+      }
+      break;
+    }
+  }
+
+  const std::string &s_;
+  size_t i_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// AST and parser
+// ---------------------------------------------------------------------------
+struct Expr;
+using ExprP = std::shared_ptr<Expr>;
+
+struct Expr {
+  enum Kind { COL, LIT, L2, CMP, AND, OR, NOT } kind = LIT;
+  std::string name;  // column name or comparison operator
+  Value lit;
+  std::vector<float> vec;
+  ExprP a, b;
+};
+
+struct SelectItem {
+  ExprP expr;
+  std::string alias;
+};
+
+struct OrderItem {
+  ExprP expr;
+  bool asc = true;
+};
+
+struct Stmt {
+  enum Kind {
+    CREATE_TABLE,
+    INSERT,
+    SELECT,
+    UPDATE,
+    DELETE_,
+    BEGIN,
+    COMMIT,
+    ROLLBACK,
+    CREATE_INDEX,
+    DROP_TABLE,
+    OTHER
+  } kind = OTHER;
+
+  std::string table;
+  std::vector<Column> cols;
+  int pk = -1;
+  int vec = -1;
+  bool if_not_exists = false;
+  bool if_exists = false;
+  std::string index_name, index_col;
+
+  std::vector<std::string> insert_cols;
+  std::vector<std::vector<ExprP>> insert_rows;
+
+  std::vector<SelectItem> items;
+  bool star = false;
+  ExprP where;
+  std::vector<OrderItem> order;
+  int64_t limit = -1;
+  int64_t offset = 0;
+
+  std::vector<std::pair<std::string, ExprP>> sets;
+};
+
+class Parser {
+ public:
+  explicit Parser(const std::string &sql) : lex_(sql), tok_(lex_.next()) {}
+  Stmt parse() { return parse_statement(); }
+
+ private:
+  Lexer lex_;
+  Token tok_;
+
+  void adv() { tok_ = lex_.next(); }
+  bool is_kw(const char *k) const {
+    return tok_.kind == Token::IDENT && upper(tok_.text) == k;
+  }
+  bool match_kw(const char *k) {
+    if (is_kw(k)) {
+      adv();
+      return true;
+    }
+    return false;
+  }
+  void expect_kw(const char *k) {
+    if (!match_kw(k)) throw syntax(std::string("expected ") + k);
+  }
+  bool is_sym(const char *s) const { return tok_.kind == Token::SYMBOL && tok_.text == s; }
+  bool match_sym(const char *s) {
+    if (is_sym(s)) {
+      adv();
+      return true;
+    }
+    return false;
+  }
+  void expect_sym(const char *s) {
+    if (!match_sym(s)) throw syntax(std::string("expected '") + s + "'");
+  }
+  std::string ident() {
+    if (tok_.kind != Token::IDENT) throw syntax("expected identifier");
+    std::string s = tok_.text;
+    adv();
+    return s;
+  }
+  int64_t int_lit() {
+    if (tok_.kind != Token::NUMBER) throw syntax("expected integer");
+    std::string t = tok_.text;
+    adv();
+    char *end = nullptr;
+    errno = 0;
+    long long v = std::strtoll(t.c_str(), &end, 10);
+    if (end == t.c_str() || *end != '\0' || errno == ERANGE)
+      throw syntax("invalid integer");
+    return v;
+  }
+
+  Stmt parse_statement() {
+    Stmt st;
+    if (tok_.kind == Token::END) return st;
+    if (match_kw("CREATE")) {
+      if (match_kw("TABLE")) return parse_create_table();
+      if (match_kw("VECTOR")) {
+        expect_kw("INDEX");
+        st.kind = Stmt::CREATE_INDEX;
+        st.index_name = ident();
+        expect_kw("ON");
+        st.table = ident();
+        expect_sym("(");
+        st.index_col = ident();
+        expect_sym(")");
+        return st;
+      }
+      if (match_kw("INDEX")) {
+        st.kind = Stmt::CREATE_INDEX;
+        st.index_name = ident();
+        expect_kw("ON");
+        st.table = ident();
+        expect_sym("(");
+        st.index_col = ident();
+        expect_sym(")");
+        return st;
+      }
+      throw syntax("unsupported CREATE statement");
+    }
+    if (match_kw("DROP")) {
+      expect_kw("TABLE");
+      st.kind = Stmt::DROP_TABLE;
+      if (match_kw("IF")) {
+        expect_kw("EXISTS");
+        st.if_exists = true;
+      }
+      st.table = ident();
+      return st;
+    }
+    if (match_kw("INSERT")) return parse_insert();
+    if (match_kw("SELECT")) return parse_select();
+    if (match_kw("UPDATE")) return parse_update();
+    if (match_kw("DELETE")) {
+      expect_kw("FROM");
+      st.kind = Stmt::DELETE_;
+      st.table = ident();
+      if (match_kw("WHERE")) st.where = parse_expr();
+      return st;
+    }
+    if (match_kw("BEGIN")) {
+      st.kind = Stmt::BEGIN;
+      return st;
+    }
+    if (match_kw("START")) {
+      expect_kw("TRANSACTION");
+      st.kind = Stmt::BEGIN;
+      return st;
+    }
+    if (match_kw("COMMIT")) {
+      st.kind = Stmt::COMMIT;
+      return st;
+    }
+    if (match_kw("ROLLBACK")) {
+      st.kind = Stmt::ROLLBACK;
+      return st;
+    }
+    if (match_kw("SET") || match_kw("USE")) {
+      // Session settings / USE are not part of the scored subset; accept them.
+      while (tok_.kind != Token::END) adv();
+      st.kind = Stmt::OTHER;
+      return st;
+    }
+    // Unknown leading token: consume the rest so the REPL stays usable.
+    throw syntax("unsupported statement");
+  }
+
+  Stmt parse_create_table() {
+    Stmt st;
+    st.kind = Stmt::CREATE_TABLE;
+    if (match_kw("IF")) {
+      expect_kw("NOT");
+      expect_kw("EXISTS");
+      st.if_not_exists = true;
+    }
+    st.table = ident();
+    expect_sym("(");
+    bool first = true;
+    while (true) {
+      if (tok_.kind == Token::END) throw syntax("unterminated CREATE TABLE");
+      if (!first) {
+        if (!match_sym(",")) break;
+      }
+      first = false;
+      if (is_kw("PRIMARY")) {
+        adv();
+        expect_kw("KEY");
+        expect_sym("(");
+        std::string c = ident();
+        expect_sym(")");
+        for (size_t i = 0; i < st.cols.size(); ++i)
+          if (ieq(st.cols[i].name, c.c_str())) st.pk = (int)i;
+        if (st.pk < 0) throw syntax("PRIMARY KEY column not found");
+        continue;
+      }
+      Column c;
+      c.name = ident();
+      if (tok_.kind != Token::IDENT) throw syntax("expected column type");
+      std::string tp = upper(tok_.text);
+      adv();
+      if (tp == "BIGINT" || tp == "INT" || tp == "INTEGER") {
+        c.type = VT_BIGINT;
+        c.len = 0;
+      } else if (tp == "VARCHAR") {
+        expect_sym("(");
+        c.len = (int)int_lit();
+        expect_sym(")");
+        c.type = VT_VARCHAR;
+        if (c.len <= 0) throw syntax("VARCHAR length must be positive");
+      } else if (tp == "VECTOR") {
+        expect_sym("(");
+        c.len = (int)int_lit();
+        expect_sym(")");
+        c.type = VT_VECTOR;
+        if (c.len <= 0) throw syntax("VECTOR dimension must be positive");
+      } else {
+        throw syntax("unsupported column type " + tp);
+      }
+      while (true) {
+        if (match_kw("PRIMARY")) {
+          expect_kw("KEY");
+          for (size_t i = 0; i < st.cols.size(); ++i)
+            if (ieq(st.cols[i].name, c.name.c_str())) st.pk = (int)i;
+          st.pk = (int)st.cols.size();
+        } else if (match_kw("NOT")) {
+          expect_kw("NULL");
+        } else if (match_kw("UNIQUE")) {
+          // accepted, not enforced beyond the primary key
+        } else {
+          break;
+        }
+      }
+      st.cols.push_back(c);
+    }
+    expect_sym(")");
+    if (st.cols.empty()) throw syntax("table must have columns");
+    int pk = st.pk;
+    int vec = -1;
+    int pkcount = 0;
+    for (size_t i = 0; i < st.cols.size(); ++i) {
+      if (st.cols[i].type == VT_VECTOR) {
+        if (vec >= 0) throw syntax("at most one vector column");
+        vec = (int)i;
+      }
+      if (st.cols[i].type == VT_BIGINT && pk < 0) {
+        // no explicit PK yet
+      }
+    }
+    if (pk < 0) throw syntax("a BIGINT PRIMARY KEY is required");
+    for (size_t i = 0; i < st.cols.size(); ++i)
+      if (st.cols[i].type == VT_BIGINT && (int)i == pk) ++pkcount;
+    if (pkcount != 1) throw syntax("PRIMARY KEY must be a BIGINT column");
+    st.vec = vec;
+    return st;
+  }
+
+  Stmt parse_insert() {
+    Stmt st;
+    st.kind = Stmt::INSERT;
+    expect_kw("INTO");
+    st.table = ident();
+    if (match_sym("(")) {
+      do {
+        st.insert_cols.push_back(ident());
+      } while (match_sym(","));
+      expect_sym(")");
+    }
+    expect_kw("VALUES");
+    do {
+      expect_sym("(");
+      std::vector<ExprP> row;
+      do {
+        row.push_back(parse_primary());
+      } while (match_sym(","));
+      expect_sym(")");
+      st.insert_rows.push_back(std::move(row));
+    } while (match_sym(","));
+    return st;
+  }
+
+  Stmt parse_select() {
+    Stmt st;
+    st.kind = Stmt::SELECT;
+    if (match_sym("*")) {
+      st.star = true;
+    } else {
+      do {
+        SelectItem it;
+        it.expr = parse_expr();
+        if (match_kw("AS")) {
+          it.alias = ident();
+        } else if (tok_.kind == Token::IDENT) {
+          std::string u = upper(tok_.text);
+          if (u != "FROM" && u != "WHERE" && u != "ORDER" && u != "LIMIT" &&
+              u != "ASC" && u != "DESC" && u != "AND" && u != "OR") {
+            it.alias = ident();
+          }
+        }
+        st.items.push_back(std::move(it));
+      } while (match_sym(","));
+    }
+    expect_kw("FROM");
+    st.table = ident();
+    if (match_kw("WHERE")) st.where = parse_expr();
+    if (match_kw("ORDER")) {
+      expect_kw("BY");
+      do {
+        OrderItem oi;
+        oi.expr = parse_expr();
+        if (match_kw("DESC")) oi.asc = false;
+        else match_kw("ASC");
+        st.order.push_back(std::move(oi));
+      } while (match_sym(","));
+    }
+    if (match_kw("LIMIT")) {
+      int64_t a = int_lit();
+      if (match_sym(",")) {
+        st.offset = a;
+        st.limit = int_lit();
+      } else if (match_kw("OFFSET")) {
+        st.limit = a;
+        st.offset = int_lit();
+      } else {
+        st.limit = a;
+      }
+      if (st.limit < 0 || st.offset < 0) throw syntax("LIMIT/OFFSET must be non-negative");
+    }
+    return st;
+  }
+
+  Stmt parse_update() {
+    Stmt st;
+    st.kind = Stmt::UPDATE;
+    st.table = ident();
+    expect_kw("SET");
+    do {
+      std::string c = ident();
+      expect_sym("=");
+      st.sets.emplace_back(c, parse_expr());
+    } while (match_sym(","));
+    if (match_kw("WHERE")) st.where = parse_expr();
+    return st;
+  }
+
+  ExprP parse_expr() { return parse_or(); }
+
+  ExprP parse_or() {
+    ExprP a = parse_and();
+    while (match_kw("OR")) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::OR;
+      e->a = a;
+      e->b = parse_and();
+      a = e;
+    }
+    return a;
+  }
+
+  ExprP parse_and() {
+    ExprP a = parse_cmp();
+    while (match_kw("AND")) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::AND;
+      e->a = a;
+      e->b = parse_cmp();
+      a = e;
+    }
+    return a;
+  }
+
+  ExprP parse_cmp() {
+    ExprP a = parse_primary();
+    if (tok_.kind == Token::SYMBOL &&
+        (tok_.text == "=" || tok_.text == "<>" || tok_.text == "!=" ||
+         tok_.text == "<" || tok_.text == "<=" || tok_.text == ">" ||
+         tok_.text == ">=")) {
+      std::string op = tok_.text;
+      adv();
+      ExprP b = parse_primary();
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::CMP;
+      e->name = op;
+      e->a = a;
+      e->b = b;
+      return e;
+    }
+    return a;
+  }
+
+  ExprP parse_primary() {
+    if (tok_.kind == Token::IDENT && ieq(tok_.text, "L2_DISTANCE")) {
+      adv();
+      expect_sym("(");
+      std::string col = ident();
+      expect_sym(",");
+      std::vector<float> q;
+      if (tok_.kind == Token::STRING) {
+        std::string er;
+        if (!parse_vector_string(tok_.text, q, er)) throw syntax(er);
+        adv();
+      } else if (match_sym("[")) {
+        q = parse_number_vector();
+      } else {
+        throw syntax("expected vector literal");
+      }
+      expect_sym(")");
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::L2;
+      e->name = col;
+      e->vec = std::move(q);
+      return e;
+    }
+    if (tok_.kind == Token::IDENT) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::COL;
+      e->name = tok_.text;
+      adv();
+      return e;
+    }
+    if (tok_.kind == Token::NUMBER) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::LIT;
+      std::string t = tok_.text;
+      if (t.find('.') != std::string::npos || t.find('e') != std::string::npos ||
+          t.find('E') != std::string::npos) {
+        e->lit.type = VT_DOUBLE;
+        e->lit.d = std::strtod(t.c_str(), nullptr);
+      } else {
+        errno = 0;
+        char *end = nullptr;
+        long long v = std::strtoll(t.c_str(), &end, 10);
+        if (errno == ERANGE || end == t.c_str() || *end) throw syntax("invalid integer");
+        e->lit.type = VT_BIGINT;
+        e->lit.i = v;
+      }
+      adv();
+      return e;
+    }
+    if (tok_.kind == Token::STRING) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::LIT;
+      e->lit.type = VT_VARCHAR;
+      e->lit.s = tok_.text;
+      adv();
+      return e;
+    }
+    if (is_sym("[")) {
+      adv();
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::LIT;
+      e->lit.type = VT_VECTOR;
+      e->lit.v = parse_number_vector();
+      return e;
+    }
+    if (match_sym("(")) {
+      ExprP e = parse_expr();
+      expect_sym(")");
+      return e;
+    }
+    if (match_sym("-")) {
+      ExprP e = parse_primary();
+      if (e->kind == Expr::LIT && e->lit.type == VT_BIGINT) e->lit.i = -e->lit.i;
+      else if (e->kind == Expr::LIT && e->lit.type == VT_DOUBLE) e->lit.d = -e->lit.d;
+      else throw syntax("unary minus needs a numeric literal");
+      return e;
+    }
+    throw syntax("unexpected token");
+  }
+
+  std::vector<float> parse_number_vector() {
+    std::vector<float> v;
+    if (match_sym("]")) return v;
+    while (true) {
+      bool neg = match_sym("-");
+      if (tok_.kind != Token::NUMBER) throw syntax("expected vector number");
+      char *end = nullptr;
+      double d = std::strtod(tok_.text.c_str(), &end);
+      if (end == tok_.text.c_str() || *end) throw syntax("invalid vector number");
+      adv();
+      if (!std::isfinite(d) || std::fabs(d) > FLT_MAX)
+        throw syntax("vector component is not a finite float32");
+      v.push_back((float)(neg ? -d : d));
+      if (match_sym("]")) break;
+      expect_sym(",");
+    }
+    return v;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Database engine
+// ---------------------------------------------------------------------------
+struct Undo {
+  int op = 0;  // 1=insert, 2=update, 3=delete
+  std::string table;
+  int64_t pk = 0;
+  size_t idx = 0;
+  Row old;
+};
+
+class DB {
+ public:
+  DB() = default;
+  ~DB() { close(); }
+
+  bool open(const std::string &dir, std::string &err) {
+    dir_ = dir;
+    std::error_code ec;
+    fs::create_directories(dir_, ec);
+    if (!fs::exists(dir_)) {
+      err = "cannot create data directory " + dir_;
+      return false;
+    }
+    if (!load_snapshot(err)) return false;
+    if (!replay_wal(err)) return false;
+    recovering_ = false;
+    if (!save_snapshot(err)) return false;
+    truncate_wal_file();
+    if (!open_wal_append(err)) return false;
+    return true;
+  }
+
+  void close() {
+    if (closed_) return;
+    if (in_tx_) rollback_tx();
+    closed_ = true;
+    if (wal_) {
+      std::fclose(wal_);
+      wal_ = nullptr;
+    }
+    std::string err;
+    save_snapshot(err);
+    truncate_wal_file();
+  }
+
+  // Execute one statement.  On success, out is the on-wire response text.
+  // Throws SqlError for parse/execution errors.
+  std::string exec_sql(const std::string &raw, bool recovering = false) {
+    Parser p(raw);
+    Stmt st = p.parse();
+    bool rec = recovering || recovering_;
+    std::string out;
+    switch (st.kind) {
+      case Stmt::BEGIN: {
+        if (in_tx_) throw SqlError(1568, "25001", "transaction already in progress");
+        in_tx_ = true;
+        undo_.clear();
+        tx_sql_.clear();
+        out = ok(0);
+        break;
+      }
+      case Stmt::COMMIT: {
+        if (in_tx_) commit_tx();
+        out = ok(0);
+        break;
+      }
+      case Stmt::ROLLBACK: {
+        if (in_tx_) rollback_tx();
+        out = ok(0);
+        break;
+      }
+      case Stmt::OTHER:
+        out = ok(0);
+        break;
+      case Stmt::CREATE_TABLE:
+        if (in_tx_) commit_tx();
+        create_table(st, raw, rec);
+        out = ok(0);
+        break;
+      case Stmt::DROP_TABLE:
+        if (in_tx_) commit_tx();
+        drop_table(st, raw, rec);
+        out = ok(0);
+        break;
+      case Stmt::CREATE_INDEX:
+        // Exact search is always available; the optional ANN index is a no-op.
+        {
+          auto &t = table(st.table);
+          (void)t;
+          col_index(t, st.index_col);
+        }
+        out = ok(0);
+        break;
+      case Stmt::INSERT: {
+        int64_t n = insert_rows(st, raw, rec);
+        out = ok(n);
+        break;
+      }
+      case Stmt::UPDATE: {
+        int64_t n = update_rows(st, raw, rec);
+        out = ok(n);
+        break;
+      }
+      case Stmt::DELETE_: {
+        int64_t n = delete_rows(st, raw, rec);
+        out = ok(n);
+        break;
+      }
+      case Stmt::SELECT:
+        out = select_rows(st);
+        break;
+    }
+    return out;
+  }
+
+  bool recovering_ = false;
+
+ private:
+  std::string dir_;
+  std::map<std::string, Table> tables_;
+  bool in_tx_ = false;
+  bool closed_ = false;
+  std::vector<Undo> undo_;
+  std::vector<std::string> tx_sql_;
+  uint64_t seq_ = 0;
+  uint64_t last_seq_ = 0;
+  FILE *wal_ = nullptr;
+
+  static std::string ok(int64_t n) {
+    if (n == 1) return "Query OK, 1 row affected";
+    return "Query OK, " + std::to_string(n) + " rows affected";
+  }
+
+  Table &table(const std::string &name) {
+    auto it = tables_.find(name);
+    if (it == tables_.end())
+      throw SqlError(1146, "42S02", "Table '" + name + "' doesn't exist");
+    return it->second;
+  }
+
+  int col_index(const Table &t, const std::string &name) {
+    for (size_t i = 0; i < t.cols.size(); ++i)
+      if (ieq(t.cols[i].name, name.c_str())) return (int)i;
+    throw SqlError(1054, "42S22", "Unknown column '" + name + "'");
+  }
+
+  int64_t row_pk(const Table &t, const Row &r) const {
+    return r.vals[(size_t)t.pk].i;
+  }
+
+  Value coerce(const Value &v, const Column &c) {
+    if (c.type == VT_BIGINT) {
+      if (v.type == VT_BIGINT) return v;
+      if (v.type == VT_DOUBLE) {
+        if (!std::isfinite(v.d) || v.d != std::floor(v.d) ||
+            v.d < (double)std::numeric_limits<int64_t>::min() ||
+            v.d > (double)std::numeric_limits<int64_t>::max())
+          throw SqlError(1366, "22007", "Incorrect integer value");
+        Value r;
+        r.type = VT_BIGINT;
+        r.i = (int64_t)v.d;
+        return r;
+      }
+      if (v.type == VT_VARCHAR) {
+        std::string t = trim(v.s);
+        char *end = nullptr;
+        errno = 0;
+        long long x = std::strtoll(t.c_str(), &end, 10);
+        if (!t.empty() && end && *end == '\0' && errno != ERANGE) {
+          Value r;
+          r.type = VT_BIGINT;
+          r.i = (int64_t)x;
+          return r;
+        }
+      }
+      throw SqlError(1366, "22007", "Incorrect integer value");
+    }
+    if (c.type == VT_VARCHAR) {
+      Value r;
+      r.type = VT_VARCHAR;
+      if (v.type == VT_VARCHAR) r.s = v.s;
+      else if (v.type == VT_BIGINT) r.s = std::to_string(v.i);
+      else if (v.type == VT_DOUBLE) r.s = fmt_double(v.d);
+      else throw SqlError(1366, "22007", "Incorrect string value");
+      if ((int)utf8_len(r.s) > c.len)
+        throw SqlError(1406, "22001", "Data too long for column '" + c.name + "'");
+      return r;
+    }
+    if (c.type == VT_VECTOR) {
+      std::vector<float> vv;
+      if (v.type == VT_VECTOR) {
+        vv = v.v;
+      } else if (v.type == VT_VARCHAR) {
+        std::string er;
+        if (!parse_vector_string(v.s, vv, er))
+          throw SqlError(1366, "22007", "Incorrect vector value: " + er);
+      } else {
+        throw SqlError(1366, "22007", "Incorrect vector value");
+      }
+      if ((int)vv.size() != c.len)
+        throw SqlError(1366, "22007", "Vector dimension mismatch for column '" + c.name + "'");
+      for (float x : vv) {
+        if (!std::isfinite(x))
+          throw SqlError(1366, "22007", "Vector component is not finite");
+      }
+      Value out;
+      out.type = VT_VECTOR;
+      out.v = std::move(vv);
+      return out;
+    }
+    throw SqlError(1105, "HY000", "unsupported column type");
+  }
+
+  Value default_value(const Column &c) {
+    Value v;
+    v.type = c.type;
+    if (c.type == VT_VECTOR) v.v.assign((size_t)c.len, 0.0f);
+    return v;
+  }
+
+  Value eval(const ExprP &e, const Table &t, const Row &r) {
+    if (!e) throw SqlError(1105, "HY000", "empty expression");
+    switch (e->kind) {
+      case Expr::LIT:
+        return e->lit;
+      case Expr::COL: {
+        if (r.vals.empty())
+          throw SqlError(1105, "HY000", "column reference not allowed in this context");
+        int idx = col_index(t, e->name);
+        return r.vals[(size_t)idx];
+      }
+      case Expr::L2: {
+        if (r.vals.empty())
+          throw SqlError(1105, "HY000", "column reference not allowed in this context");
+        int idx = col_index(t, e->name);
+        const Value &v = r.vals[(size_t)idx];
+        if (v.type != VT_VECTOR)
+          throw SqlError(1366, "22007", "L2_DISTANCE needs a VECTOR column");
+        if (v.v.size() != e->vec.size())
+          throw SqlError(1366, "22007", "Vector dimension mismatch");
+        double sum = 0;
+        for (size_t i = 0; i < v.v.size(); ++i) {
+          double d = (double)v.v[i] - (double)e->vec[i];
+          sum += d * d;
+        }
+        Value out;
+        out.type = VT_DOUBLE;
+        out.d = std::sqrt(sum);
+        return out;
+      }
+      case Expr::CMP: {
+        Value a = eval(e->a, t, r), b = eval(e->b, t, r);
+        int c = value_cmp(a, b);
+        int tv = 0;
+        if (e->name == "=") tv = (c == 0);
+        else if (e->name == "!=" || e->name == "<>") tv = (c != 0);
+        else if (e->name == "<") tv = (c < 0);
+        else if (e->name == "<=") tv = (c <= 0);
+        else if (e->name == ">") tv = (c > 0);
+        else if (e->name == ">=") tv = (c >= 0);
+        Value out;
+        out.type = VT_BIGINT;
+        out.i = tv;
+        return out;
+      }
+      case Expr::AND: {
+        Value out;
+        out.type = VT_BIGINT;
+        out.i = (eval(e->a, t, r).i != 0 && eval(e->b, t, r).i != 0);
+        return out;
+      }
+      case Expr::OR: {
+        Value out;
+        out.type = VT_BIGINT;
+        out.i = (eval(e->a, t, r).i != 0 || eval(e->b, t, r).i != 0);
+        return out;
+      }
+      case Expr::NOT: {
+        Value out;
+        out.type = VT_BIGINT;
+        out.i = (eval(e->a, t, r).i == 0);
+        return out;
+      }
+    }
+    throw SqlError(1105, "HY000", "bad expression");
+  }
+
+  bool where_matches(const ExprP &where, const Table &t, const Row &r) {
+    if (!where) return true;
+    Value v = eval(where, t, r);
+    if (v.type == VT_BIGINT) return v.i != 0;
+    if (v.type == VT_DOUBLE) return v.d != 0;
+    return false;
+  }
+
+  // ---- WAL ----------------------------------------------------------------
+  bool open_wal_append(std::string &err) {
+    if (wal_) std::fclose(wal_);
+    std::string p = (fs::path(dir_) / "wal.bin").string();
+    wal_ = std::fopen(p.c_str(), "ab");
+    if (!wal_) {
+      err = "cannot open WAL " + p;
+      return false;
+    }
+    return true;
+  }
+
+  void truncate_wal_file() {
+    if (wal_) {
+      std::fclose(wal_);
+      wal_ = nullptr;
+    }
+    std::string p = (fs::path(dir_) / "wal.bin").string();
+    FILE *f = std::fopen(p.c_str(), "wb");
+    if (f) std::fclose(f);
+  }
+
+  bool wal_sync() {
+    if (!wal_) return false;
+    if (std::fflush(wal_) != 0) return false;
+    return ::fsync(::fileno(wal_)) == 0;
+  }
+
+  bool wal_record(uint8_t type, const std::string &payload) {
+    if (!wal_) return false;
+    uint64_t sq = ++seq_;
+    uint32_t len = (uint32_t)payload.size();
+    uint32_t crc = 0;
+    uint32_t c = 0xFFFFFFFFu;
+    c = crc32_update(c, &sq, 8);
+    c = crc32_update(c, &type, 1);
+    c = crc32_update(c, payload.data(), payload.size());
+    crc = c ^ 0xFFFFFFFFu;
+    if (!put_u32(wal_, len) || !put_u64(wal_, sq) || !put_u32(wal_, crc) ||
+        !put_u8(wal_, type) || !put_bytes(wal_, payload.data(), payload.size()))
+      return false;
+    return true;
+  }
+
+  void wal_commit_one(const std::string &raw) {
+    std::string sql = raw;
+    if (!sql.empty() && sql.back() != ';') sql.push_back(';');
+    if (!wal_record(1, sql) || !wal_record(2, "") || !wal_sync())
+      throw SqlError(1105, "HY000", "WAL write failed");
+    last_seq_ = seq_;
+  }
+
+  void wal_commit_tx() {
+    for (const auto &s : tx_sql_) {
+      std::string sql = s;
+      if (!sql.empty() && sql.back() != ';') sql.push_back(';');
+      if (!wal_record(1, sql)) throw SqlError(1105, "HY000", "WAL write failed");
+    }
+    if (!wal_record(2, "") || !wal_sync())
+      throw SqlError(1105, "HY000", "WAL write failed");
+    last_seq_ = seq_;
+  }
+
+  // ---- snapshots -----------------------------------------------------------
+  bool put_value(FILE *f, const Value &v) {
+    if (!put_u8(f, (uint8_t)v.type)) return false;
+    if (v.type == VT_BIGINT) return put_bytes(f, &v.i, 8);
+    if (v.type == VT_DOUBLE) return put_bytes(f, &v.d, 8);
+    if (v.type == VT_VARCHAR) return put_str(f, v.s);
+    if (v.type == VT_VECTOR) {
+      if (v.v.size() > 0xFFFFFFFFu) return false;
+      if (!put_u32(f, (uint32_t)v.v.size())) return false;
+      return put_bytes(f, v.v.data(), v.v.size() * sizeof(float));
+    }
+    return false;
+  }
+
+  bool get_value(FILE *f, Value &v) {
+    uint8_t t = 0;
+    if (!get_u8(f, t)) return false;
+    v = Value();
+    v.type = t;
+    if (t == VT_BIGINT) return get_bytes(f, &v.i, 8);
+    if (t == VT_DOUBLE) return get_bytes(f, &v.d, 8);
+    if (t == VT_VARCHAR) return get_str(f, v.s);
+    if (t == VT_VECTOR) {
+      uint32_t n = 0;
+      if (!get_u32(f, n) || n > 10000000u) return false;
+      v.v.resize(n);
+      return get_bytes(f, n ? v.v.data() : nullptr, (size_t)n * sizeof(float));
+    }
+    return false;
+  }
+
+  bool save_snapshot(std::string &err) {
+    std::string tmp = (fs::path(dir_) / "snapshot.tmp").string();
+    std::string dst = (fs::path(dir_) / "snapshot.bin").string();
+    FILE *f = std::fopen(tmp.c_str(), "wb");
+    if (!f) {
+      err = "cannot write snapshot";
+      return false;
+    }
+    bool ok = true;
+    const char magic[8] = {'M', 'V', 'D', 'B', '0', '0', '0', '1'};
+    ok = ok && put_bytes(f, magic, 8);
+    ok = ok && put_u64(f, last_seq_);
+    ok = ok && put_u32(f, (uint32_t)tables_.size());
+    for (auto &kv : tables_) {
+      const Table &t = kv.second;
+      ok = ok && put_str(f, t.name);
+      ok = ok && put_u32(f, (uint32_t)t.cols.size());
+      for (const auto &c : t.cols) {
+        ok = ok && put_str(f, c.name);
+        ok = ok && put_i32(f, c.type);
+        ok = ok && put_i32(f, c.len);
+      }
+      ok = ok && put_i32(f, t.pk);
+      ok = ok && put_i32(f, t.vec);
+      uint64_t live = 0;
+      for (const auto &r : t.rows)
+        if (!r.deleted) ++live;
+      ok = ok && put_u64(f, live);
+      for (const auto &r : t.rows) {
+        if (r.deleted) continue;
+        for (const auto &v : r.vals) ok = ok && put_value(f, v);
+      }
+      if (!ok) break;
+    }
+    if (ok) {
+      ok = std::fflush(f) == 0 && ::fsync(::fileno(f)) == 0;
+    }
+    std::fclose(f);
+    if (!ok) {
+      std::remove(tmp.c_str());
+      err = "snapshot write failed";
+      return false;
+    }
+    if (std::rename(tmp.c_str(), dst.c_str()) != 0) {
+      err = "snapshot rename failed";
+      return false;
+    }
+    fsync_dir(dir_);
+    return true;
+  }
+
+  bool load_snapshot(std::string &err) {
+    std::string p = (fs::path(dir_) / "snapshot.bin").string();
+    FILE *f = std::fopen(p.c_str(), "rb");
+    if (!f) return true;  // fresh data directory
+    char magic[8];
+    if (!get_bytes(f, magic, 8) || std::memcmp(magic, "MVDB0001", 8) != 0) {
+      std::fclose(f);
+      err = "invalid snapshot";
+      return false;
+    }
+    uint64_t last = 0;
+    uint32_t ntab = 0;
+    if (!get_u64(f, last) || !get_u32(f, ntab) || ntab > 1000000u) {
+      std::fclose(f);
+      err = "invalid snapshot header";
+      return false;
+    }
+    last_seq_ = last;
+    tables_.clear();
+    for (uint32_t ti = 0; ti < ntab; ++ti) {
+      Table t;
+      uint32_t nc = 0;
+      if (!get_str(f, t.name) || !get_u32(f, nc) || nc > 100000u) {
+        std::fclose(f);
+        err = "invalid snapshot table";
+        return false;
+      }
+      t.cols.resize(nc);
+      for (auto &c : t.cols) {
+        int32_t ty = 0, ln = 0;
+        if (!get_str(f, c.name) || !get_i32(f, ty) || !get_i32(f, ln)) {
+          std::fclose(f);
+          err = "invalid snapshot column";
+          return false;
+        }
+        c.type = ty;
+        c.len = ln;
+      }
+      int32_t pk = -1, vec = -1;
+      if (!get_i32(f, pk) || !get_i32(f, vec)) {
+        std::fclose(f);
+        err = "invalid snapshot table metadata";
+        return false;
+      }
+      t.pk = pk;
+      t.vec = vec;
+      uint64_t nrow = 0;
+      if (!get_u64(f, nrow) || nrow > 1000000000ull) {
+        std::fclose(f);
+        err = "invalid snapshot row count";
+        return false;
+      }
+      t.rows.reserve((size_t)std::min<uint64_t>(nrow, 1000000));
+      for (uint64_t ri = 0; ri < nrow; ++ri) {
+        Row r;
+        r.vals.resize(nc);
+        for (auto &v : r.vals) {
+          if (!get_value(f, v)) {
+            std::fclose(f);
+            err = "invalid snapshot row";
+            return false;
+          }
+        }
+        if (t.pk >= 0 && (size_t)t.pk < r.vals.size()) {
+          int64_t key = r.vals[(size_t)t.pk].i;
+          if (t.pkmap.count(key)) {
+            std::fclose(f);
+            err = "duplicate primary key in snapshot";
+            return false;
+          }
+          t.pkmap[key] = t.rows.size();
+        }
+        t.rows.push_back(std::move(r));
+      }
+      tables_[t.name] = std::move(t);
+    }
+    std::fclose(f);
+    return true;
+  }
+
+  // WAL replay.  Complete transaction groups with seq > snapshot last_seq are
+  // re-executed; a trailing incomplete record is ignored.
+  bool replay_wal(std::string &err) {
+    std::string p = (fs::path(dir_) / "wal.bin").string();
+    FILE *f = std::fopen(p.c_str(), "rb");
+    if (!f) return true;
+    std::vector<std::string> buf;
+    uint64_t maxseq = last_seq_;
+    for (;;) {
+      uint32_t len = 0, crc = 0;
+      uint64_t sq = 0;
+      uint8_t type = 0;
+      if (std::fread(&len, 4, 1, f) != 1) break;
+      if (std::fread(&sq, 8, 1, f) != 1) break;
+      if (std::fread(&crc, 4, 1, f) != 1) break;
+      if (std::fread(&type, 1, 1, f) != 1) break;
+      if (len > 64u * 1024u * 1024u) break;
+      std::string payload(len, '\0');
+      if (len && std::fread(&payload[0], 1, len, f) != len) break;
+      uint32_t c = 0xFFFFFFFFu;
+      c = crc32_update(c, &sq, 8);
+      c = crc32_update(c, &type, 1);
+      c = crc32_update(c, payload.data(), payload.size());
+      c ^= 0xFFFFFFFFu;
+      if (c != crc) break;
+      if (type == 1) {
+        buf.push_back(payload);
+      } else if (type == 2) {
+        if (sq > last_seq_) {
+          for (auto &sql : buf) {
+            try {
+              recovering_ = true;
+              std::string ignored = exec_sql(sql, true);
+              (void)ignored;
+            } catch (const SqlError &e) {
+              std::cerr << "WAL replay error [" << e.code << "]: " << e.what()
+                        << " sql=" << sql.substr(0, 200) << "\n";
+            } catch (const std::exception &e) {
+              std::cerr << "WAL replay exception: " << e.what() << "\n";
+            }
+          }
+          maxseq = std::max(maxseq, sq);
+        }
+        buf.clear();
+      }
+    }
+    std::fclose(f);
+    last_seq_ = maxseq;
+    seq_ = maxseq;
+    recovering_ = false;
+    return true;
+  }
+
+  // ---- DDL / DML -----------------------------------------------------------
+  void create_table(const Stmt &st, const std::string &raw, bool recovering) {
+    if (tables_.count(st.table)) {
+      if (st.if_not_exists) return;
+      throw SqlError(1050, "42S01", "Table '" + st.table + "' already exists");
+    }
+    std::set<std::string> names;
+    for (const auto &c : st.cols) {
+      std::string u = upper(c.name);
+      if (names.count(u))
+        throw SqlError(1060, "42S21", "Duplicate column name '" + c.name + "'");
+      names.insert(u);
+    }
+    if (!recovering) {
+      wal_commit_one(raw);
+    }
+    Table t;
+    t.name = st.table;
+    t.cols = st.cols;
+    t.pk = st.pk;
+    t.vec = st.vec;
+    tables_[st.table] = std::move(t);
+  }
+
+  void drop_table(const Stmt &st, const std::string &raw, bool recovering) {
+    auto it = tables_.find(st.table);
+    if (it == tables_.end()) {
+      if (st.if_exists) return;
+      throw SqlError(1051, "42S02", "Unknown table '" + st.table + "'");
+    }
+    if (!recovering) wal_commit_one(raw);
+    tables_.erase(it);
+  }
+
+  int64_t insert_rows(const Stmt &st, const std::string &raw, bool recovering) {
+    Table &t = table(st.table);
+    std::vector<int> target;
+    if (st.insert_cols.empty()) {
+      for (size_t i = 0; i < t.cols.size(); ++i) target.push_back((int)i);
+    } else {
+      std::set<int> seen;
+      for (const auto &c : st.insert_cols) {
+        int idx = col_index(t, c);
+        if (seen.count(idx))
+          throw SqlError(1110, "42000", "Column '" + c + "' specified twice");
+        seen.insert(idx);
+        target.push_back(idx);
+      }
+    }
+    if (target.empty()) throw syntax("no insert columns");
+    std::set<int64_t> newkeys;
+    std::vector<Row> newrows;
+    for (const auto &src : st.insert_rows) {
+      if (src.size() != target.size())
+        throw SqlError(1136, "21S01",
+                       "Column count doesn't match value count");
+      Row r;
+      r.vals.resize(t.cols.size());
+      for (size_t i = 0; i < t.cols.size(); ++i) r.vals[i] = default_value(t.cols[i]);
+      for (size_t i = 0; i < target.size(); ++i) {
+        Value v = eval(src[i], t, Row{});
+        r.vals[(size_t)target[i]] = coerce(v, t.cols[(size_t)target[i]]);
+      }
+      int64_t key = r.vals[(size_t)t.pk].i;
+      if (t.pkmap.count(key) || newkeys.count(key))
+        throw SqlError(1062, "23000", "Duplicate entry '" + std::to_string(key) +
+                                       "' for key 'PRIMARY'");
+      newkeys.insert(key);
+      newrows.push_back(std::move(r));
+    }
+    if (!in_tx_ && !recovering) wal_commit_one(raw);
+    for (auto &r : newrows) {
+      int64_t key = r.vals[(size_t)t.pk].i;
+      size_t idx = t.rows.size();
+      t.pkmap[key] = idx;
+      if (in_tx_) undo_.push_back({1, st.table, key, idx, Row{}});
+      t.rows.push_back(std::move(r));
+    }
+    if (in_tx_) tx_sql_.push_back(raw);
+    return (int64_t)newrows.size();
+  }
+
+  int64_t update_rows(const Stmt &st, const std::string &raw, bool recovering) {
+    Table &t = table(st.table);
+    std::vector<std::pair<int, ExprP>> assigns;
+    std::set<int> seen;
+    for (const auto &p : st.sets) {
+      int idx = col_index(t, p.first);
+      if (idx == t.pk)
+        throw SqlError(1105, "HY000", "Primary key update is not supported");
+      if (seen.count(idx))
+        throw SqlError(1110, "42000", "Column '" + p.first + "' specified twice");
+      seen.insert(idx);
+      assigns.emplace_back(idx, p.second);
+    }
+    if (assigns.empty()) throw syntax("SET requires at least one assignment");
+    std::vector<size_t> hits;
+    for (size_t i = 0; i < t.rows.size(); ++i) {
+      if (t.rows[i].deleted) continue;
+      if (where_matches(st.where, t, t.rows[i])) hits.push_back(i);
+    }
+    std::vector<Row> news;
+    news.reserve(hits.size());
+    for (size_t idx : hits) {
+      Row nr = t.rows[idx];
+      for (auto &a : assigns) {
+        Value v = eval(a.second, t, t.rows[idx]);
+        nr.vals[(size_t)a.first] = coerce(v, t.cols[(size_t)a.first]);
+      }
+      news.push_back(std::move(nr));
+    }
+    if (!in_tx_ && !recovering) wal_commit_one(raw);
+    for (size_t i = 0; i < hits.size(); ++i) {
+      size_t idx = hits[i];
+      Row old = t.rows[idx];
+      if (in_tx_) undo_.push_back({2, st.table, row_pk(t, old), idx, old});
+      t.rows[idx] = std::move(news[i]);
+    }
+    if (in_tx_) tx_sql_.push_back(raw);
+    return (int64_t)hits.size();
+  }
+
+  int64_t delete_rows(const Stmt &st, const std::string &raw, bool recovering) {
+    Table &t = table(st.table);
+    std::vector<size_t> hits;
+    for (size_t i = 0; i < t.rows.size(); ++i) {
+      if (t.rows[i].deleted) continue;
+      if (where_matches(st.where, t, t.rows[i])) hits.push_back(i);
+    }
+    if (!in_tx_ && !recovering) wal_commit_one(raw);
+    for (size_t idx : hits) {
+      Row old = t.rows[idx];
+      int64_t key = row_pk(t, old);
+      if (in_tx_) undo_.push_back({3, st.table, key, idx, old});
+      t.rows[idx].deleted = true;
+      t.pkmap.erase(key);
+    }
+    if (in_tx_) tx_sql_.push_back(raw);
+    return (int64_t)hits.size();
+  }
+
+  // ---- transactions --------------------------------------------------------
+  void commit_tx() {
+    if (!tx_sql_.empty()) wal_commit_tx();
+    undo_.clear();
+    tx_sql_.clear();
+    in_tx_ = false;
+  }
+
+  void rollback_tx() {
+    for (auto it = undo_.rbegin(); it != undo_.rend(); ++it) {
+      auto tit = tables_.find(it->table);
+      if (tit == tables_.end()) continue;
+      Table &t = tit->second;
+      if (it->op == 1) {
+        // inserted row: remove it
+        if (it->idx < t.rows.size() && !t.rows[it->idx].deleted) {
+          t.rows[it->idx].deleted = true;
+          t.pkmap.erase(it->pk);
+        }
+      } else if (it->op == 2 || it->op == 3) {
+        if (it->idx < t.rows.size()) {
+          t.rows[it->idx] = it->old;
+          t.rows[it->idx].deleted = false;
+          t.pkmap[it->pk] = it->idx;
+        }
+      }
+    }
+    undo_.clear();
+    tx_sql_.clear();
+    in_tx_ = false;
+  }
+
+  // ---- SELECT --------------------------------------------------------------
+  std::string select_rows(const Stmt &st) {
+    Table &t = table(st.table);
+    std::vector<size_t> matches;
+    matches.reserve(t.rows.size());
+    for (size_t i = 0; i < t.rows.size(); ++i) {
+      if (t.rows[i].deleted) continue;
+      if (where_matches(st.where, t, t.rows[i])) matches.push_back(i);
+    }
+
+    std::vector<OrderItem> orders = st.order;
+    for (auto &oi : orders) {
+      if (oi.expr && oi.expr->kind == Expr::COL) {
+        for (const auto &it : st.items) {
+          if (!it.alias.empty() && ieq(it.alias, oi.expr->name.c_str())) {
+            oi.expr = it.expr;
+            break;
+          }
+        }
+      }
+    }
+    if (!orders.empty()) {
+      std::stable_sort(matches.begin(), matches.end(), [&](size_t a, size_t b) {
+        const Row &ra = t.rows[a], &rb = t.rows[b];
+        for (const auto &oi : orders) {
+          Value va = eval(oi.expr, t, ra);
+          Value vb = eval(oi.expr, t, rb);
+          int c = value_cmp(va, vb);
+          if (c != 0) return oi.asc ? (c < 0) : (c > 0);
+        }
+        return ra.vals[(size_t)t.pk].i < rb.vals[(size_t)t.pk].i;
+      });
+    }
+
+    int64_t off = st.offset;
+    int64_t lim = st.limit < 0 ? (int64_t)matches.size() : st.limit;
+    std::vector<std::string> headers;
+    std::vector<const ExprP *> exprs;  // null means a plain table column
+    std::vector<int> colidx;
+    if (st.star) {
+      for (size_t i = 0; i < t.cols.size(); ++i) {
+        headers.push_back(t.cols[i].name);
+        exprs.push_back(nullptr);
+        colidx.push_back((int)i);
+      }
+    } else {
+      for (const auto &it : st.items) {
+        if (it.expr->kind == Expr::COL) {
+          int idx = col_index(t, it.expr->name);
+          headers.push_back(it.alias.empty() ? t.cols[(size_t)idx].name : it.alias);
+          exprs.push_back(nullptr);
+          colidx.push_back(idx);
+        } else {
+          headers.push_back(it.alias.empty() ? "l2_distance" : it.alias);
+          exprs.push_back(&it.expr);
+          colidx.push_back(-1);
+        }
+      }
+    }
+
+    std::string out;
+    for (size_t i = 0; i < headers.size(); ++i) {
+      if (i) out.push_back('\t');
+      out += headers[i];
+    }
+    out.push_back('\n');
+    int64_t emitted = 0;
+    for (size_t k = 0; k < matches.size(); ++k) {
+      if ((int64_t)k < off) continue;
+      if (emitted >= lim) break;
+      const Row &r = t.rows[matches[k]];
+      for (size_t i = 0; i < headers.size(); ++i) {
+        if (i) out.push_back('\t');
+        Value v = exprs[i] ? eval(*exprs[i], t, r) : r.vals[(size_t)colidx[i]];
+        out += fmt_value(v);
+      }
+      out.push_back('\n');
+      ++emitted;
+    }
+    return out;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// stdin statement splitter
+// ---------------------------------------------------------------------------
+static void split_statements(std::string &buf, std::vector<std::string> &out) {
+  size_t start = 0;
+  int quote = 0;  // 1=' 2=" 3=`
+  bool line_comment = false, block_comment = false;
+  for (size_t i = 0; i < buf.size(); ++i) {
+    char c = buf[i];
+    if (line_comment) {
+      if (c == '\n') line_comment = false;
+      continue;
+    }
+    if (block_comment) {
+      if (c == '*' && i + 1 < buf.size() && buf[i + 1] == '/') {
+        block_comment = false;
+        ++i;
+      }
+      continue;
+    }
+    if (quote) {
+      if (c == '\\' && quote != 3) {
+        ++i;
+      } else if (c == (quote == 1 ? '\'' : quote == 2 ? '"' : '`')) {
+        quote = 0;
+      }
+      continue;
+    }
+    if (c == '-' && i + 1 < buf.size() && buf[i + 1] == '-' &&
+        (i + 2 >= buf.size() || std::isspace((unsigned char)buf[i + 2]))) {
+      line_comment = true;
+      ++i;
+      continue;
+    }
+    if (c == '#') {
+      line_comment = true;
+      continue;
+    }
+    if (c == '/' && i + 1 < buf.size() && buf[i + 1] == '*') {
+      block_comment = true;
+      ++i;
+      continue;
+    }
+    if (c == '\'') quote = 1;
+    else if (c == '"') quote = 2;
+    else if (c == '`') quote = 3;
+    else if (c == ';') {
+      out.push_back(buf.substr(start, i - start));
+      start = i + 1;
+    }
+  }
+  buf.erase(0, start);
+}
+
+static volatile std::sig_atomic_t g_stop = 0;
+static void on_signal(int) { g_stop = 1; }
+
+int main(int argc, char **argv) {
+  std::string dir = "/data";
+  if (const char *e = std::getenv("DATA_DIR")) dir = e;
+  if (argc > 1) dir = argv[1];
+
+  DB db;
+  std::string err;
+  if (!db.open(dir, err)) {
+    std::cerr << "open failed: " << err << "\n";
+    return 1;
+  }
+
+  struct sigaction sa;
+  std::memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = on_signal;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGTERM, &sa, nullptr);
+  sigaction(SIGINT, &sa, nullptr);
+
+  std::string buf, line;
+  while (!g_stop && std::getline(std::cin, line)) {
+    std::string t = trim(line);
+    if (ieq(t, "exit") || ieq(t, "quit")) break;
+    if (starts_with_ci(t, "DELIMITER")) continue;
+    buf += line;
+    buf.push_back('\n');
+    std::vector<std::string> stmts;
+    split_statements(buf, stmts);
+    for (auto &s : stmts) {
+      if (g_stop) break;
+      std::string sql = trim(s);
+      if (sql.empty()) continue;
+      if (ieq(sql, "exit") || ieq(sql, "quit")) {
+        buf.clear();
+        goto done;
+      }
+      try {
+        std::string out = db.exec_sql(sql);
+        if (!out.empty()) {
+          std::cout << out;
+          if (out.back() != '\n') std::cout << '\n';
+          std::cout.flush();
+        }
+      } catch (const SqlError &e) {
+        std::cout << "ERROR " << e.code << " (" << e.state << "): " << e.what() << "\n";
+        std::cout.flush();
+      } catch (const std::exception &e) {
+        std::cout << "ERROR 1105 (HY000): " << e.what() << "\n";
+        std::cout.flush();
+      }
+    }
+  }
+  {
+    std::string sql = trim(buf);
+    if (!sql.empty()) {
+      try {
+        std::string out = db.exec_sql(sql);
+        if (!out.empty()) std::cout << out << (out.back() == '\n' ? "" : "\n");
+        std::cout.flush();
+      } catch (const SqlError &e) {
+        std::cout << "ERROR " << e.code << " (" << e.state << "): " << e.what() << "\n";
+      } catch (const std::exception &e) {
+        std::cout << "ERROR 1105 (HY000): " << e.what() << "\n";
+      }
+    }
+  }
+done:
+  db.close();
+  return 0;
+}
