@@ -16,6 +16,8 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.environ.get("MINIVECTORDB", os.path.join(ROOT, "minivectordb"))
+IMAGE = os.environ.get("MVDB_IMAGE", "minivectordb:check")
+USE_DOCKER = os.environ.get("USE_DOCKER") == "1"
 CASES = os.path.join(ROOT, "mysqltest")
 
 
@@ -49,7 +51,11 @@ def run_case(name):
     tests, expected = load_case(name)
     d = tempfile.mkdtemp(prefix="mvdb-public-")
     try:
-        p = subprocess.run([BIN, d], input="\n".join(tests) + "\n", text=True,
+        if USE_DOCKER:
+            cmd = ["docker", "run", "--rm", "-i", "-v", d + ":/data", IMAGE]
+        else:
+            cmd = [BIN, d]
+        p = subprocess.run(cmd, input="\n".join(tests) + "\n", text=True,
                            capture_output=True, timeout=120)
         if p.returncode != 0:
             raise AssertionError("%s: rc=%s stderr=%s" % (name, p.returncode, p.stderr[-500:]))

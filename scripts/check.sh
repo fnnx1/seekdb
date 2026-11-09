@@ -66,6 +66,8 @@ if [[ "${RUN_DOCKER:-0}" == "1" ]]; then
   grep -q '^1$' "$D/out2.txt"
   grep -q '^2$' "$D/out2.txt"
   echo "docker smoke OK"
+  echo "== docker public cases =="
+  USE_DOCKER=1 MVDB_IMAGE=minivectordb:check python3 tests/run_public_cases.py
 fi
 
 echo "ALL CHECKS PASSED"
