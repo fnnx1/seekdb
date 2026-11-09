@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Run the official public mysqltest cases against the engine.
+"""Run the official public mysqltest cases.
 
-The public package (mysqltest/) contains one .test file per case (one SQL per
-non-empty line) and a .result JSON array with one assertion per SQL.  A new
-empty data directory is used for every case.
+The v4 package (mysqltest/) has 20 cases, one .test file per case, a .result
+JSON array with one assertion per SQL statement, and driver directives
+(--restart, --mode ann) that are not SQL and do not consume an assertion.
+Each case starts with a fresh data directory; --restart closes the process
+normally and reuses the same directory.
 """
 import json
 import math
@@ -11,7 +13,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,15 +21,45 @@ IMAGE = os.environ.get("MVDB_IMAGE", "minivectordb:check")
 USE_DOCKER = os.environ.get("USE_DOCKER") == "1"
 CASES = os.path.join(ROOT, "mysqltest")
 
+# Error codes that our engine returns for the public semantic error names.
+ERROR_CODES = {
+    "duplicate_key": 1062,
+    "unsupported_sql": 1064,
+    "dimension_mismatch": 1366,
+}
 
-def load_case(name):
-    with open(os.path.join(CASES, "cases", name + ".test"), encoding="utf-8") as f:
-        tests = [line.strip() for line in f if line.strip()]
-    with open(os.path.join(CASES, "cases", name + ".result"), encoding="utf-8") as f:
-        expected = json.load(f)
-    if len(tests) != len(expected):
-        raise AssertionError("%s: %d tests vs %d assertions" % (name, len(tests), len(expected)))
-    return tests, expected
+
+def parse_case(test_path):
+    sqls = []
+    segments = [[]]
+    with open(test_path, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line:
+                continue
+            low = line.lower()
+            if low.startswith("--"):
+                if low.startswith("--restart"):
+                    if segments[-1]:
+                        segments.append([])
+                # --mode ann: this engine returns exact results, which satisfy
+                # the public ANN expectations; no protocol change is needed.
+                continue
+            sqls.append(line)
+            segments[-1].append(line)
+    return sqls, [s for s in segments if s]
+
+
+def run_segment(sqls, d):
+    if USE_DOCKER:
+        cmd = ["docker", "run", "--rm", "-i", "-v", d + ":/data", IMAGE]
+    else:
+        cmd = [BIN, d]
+    p = subprocess.run(cmd, input="\n".join(sqls) + "\n", text=True,
+                       capture_output=True, timeout=120)
+    if p.returncode != 0:
+        raise AssertionError("rc=%s stderr=%s" % (p.returncode, p.stderr[-800:]))
+    return p.stdout.splitlines()
 
 
 def convert(text, sample):
@@ -47,24 +78,25 @@ def compare_value(actual, expected):
     return actual == expected
 
 
-def run_case(name):
-    tests, expected = load_case(name)
+def run_case(name, test_path, result_path, statements):
+    sqls, segments = parse_case(test_path)
+    with open(result_path, encoding="utf-8") as f:
+        expected = json.load(f)
+    if len(sqls) != len(expected):
+        raise AssertionError("%s: %d SQL vs %d assertions" % (name, len(sqls), len(expected)))
+    if statements is not None and len(sqls) != statements:
+        raise AssertionError("%s: %d SQL vs manifest statements %d" % (name, len(sqls), statements))
+
     d = tempfile.mkdtemp(prefix="mvdb-public-")
     try:
-        if USE_DOCKER:
-            cmd = ["docker", "run", "--rm", "-i", "-v", d + ":/data", IMAGE]
-        else:
-            cmd = [BIN, d]
-        p = subprocess.run(cmd, input="\n".join(tests) + "\n", text=True,
-                           capture_output=True, timeout=120)
-        if p.returncode != 0:
-            raise AssertionError("%s: rc=%s stderr=%s" % (name, p.returncode, p.stderr[-500:]))
-        lines = p.stdout.splitlines()
+        lines = []
+        for seg in segments:
+            lines.extend(run_segment(seg, d))
         pos = 0
-        for idx, (sql, exp) in enumerate(zip(tests, expected)):
+        for idx, (sql, exp) in enumerate(zip(sqls, expected)):
             if "columns" in exp:
                 if pos >= len(lines):
-                    raise AssertionError("%s stmt %d: missing header\n%s" % (name, idx + 1, p.stdout))
+                    raise AssertionError("%s stmt %d: missing header" % (name, idx + 1))
                 header = lines[pos].split("\t")
                 pos += 1
                 if header != exp["columns"]:
@@ -89,6 +121,19 @@ def run_case(name):
                         if len(a) != len(e) or any(not compare_value(x, y) for x, y in zip(a, e)):
                             raise AssertionError("%s stmt %d rows %r != %r\nSQL: %s" %
                                                  (name, idx + 1, actual_rows, exp["rows"], sql))
+            elif "error" in exp:
+                if pos >= len(lines):
+                    raise AssertionError("%s stmt %d: missing error\nSQL: %s" % (name, idx + 1, sql))
+                line = lines[pos]
+                pos += 1
+                m = re.match(r"ERROR (\d+) \(", line)
+                if not m:
+                    raise AssertionError("%s stmt %d: expected error, got %r\nSQL: %s" %
+                                         (name, idx + 1, line, sql))
+                want = ERROR_CODES.get(exp["error"])
+                if want is not None and int(m.group(1)) != want:
+                    raise AssertionError("%s stmt %d: error code %s != expected %s\nSQL: %s" %
+                                         (name, idx + 1, m.group(1), want, sql))
             else:
                 if pos >= len(lines):
                     raise AssertionError("%s stmt %d: missing result\nSQL: %s" % (name, idx + 1, sql))
@@ -104,20 +149,22 @@ def run_case(name):
         if pos != len(lines):
             raise AssertionError("%s: %d unexpected output lines: %r" %
                                  (name, len(lines) - pos, lines[pos:]))
-        print("PASS public/%s (%d statements)" % (name, len(tests)))
+        print("PASS public/%s (%d statements, %d segments)" %
+              (name, len(sqls), len(segments)))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
 
 def main():
-    names = []
     with open(os.path.join(CASES, "manifest.json"), encoding="utf-8") as f:
         manifest = json.load(f)
-    for c in manifest.get("cases", []):
-        names.append(c["id"])
-    for n in names:
-        run_case(n)
-    print("ALL PUBLIC CASES PASSED (%d)" % len(names))
+    cases = manifest.get("cases", [])
+    for c in cases:
+        run_case(c["id"],
+                 os.path.join(CASES, c["test"]),
+                 os.path.join(CASES, c["result"]),
+                 c.get("statements"))
+    print("ALL PUBLIC CASES PASSED (%d)" % len(cases))
 
 
 if __name__ == "__main__":
