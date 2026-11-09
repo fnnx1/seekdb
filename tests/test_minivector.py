@@ -188,6 +188,20 @@ def test_errors_schema():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_update_delete_order_limit():
+    d = fresh()
+    try:
+        run("CREATE TABLE t (id BIGINT PRIMARY KEY, name VARCHAR(10));"
+            "INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d');", d)
+        assert "Query OK, 2 rows affected" in run("UPDATE t SET name='x' ORDER BY id LIMIT 2;", d)
+        assert sel("SELECT id,name FROM t ORDER BY id;", d) == [
+            "id\tname", "1\tx", "2\tx", "3\tc", "4\td"]
+        assert "Query OK, 2 rows affected" in run("DELETE FROM t ORDER BY id DESC LIMIT 2;", d)
+        assert sel("SELECT id FROM t ORDER BY id;", d) == ["id", "1", "2"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_update_delete_limit():
     d = fresh()
     try:

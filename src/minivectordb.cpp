@@ -754,6 +754,7 @@ class Parser {
       st.kind = Stmt::DELETE_;
       st.table = ident();
       if (match_kw("WHERE")) st.where = parse_expr();
+      parse_order_by(st);
       if (match_kw("LIMIT")) st.limit = int_lit();
       return st;
     }
@@ -917,6 +918,18 @@ class Parser {
     return st;
   }
 
+  void parse_order_by(Stmt &st) {
+    if (!match_kw("ORDER")) return;
+    expect_kw("BY");
+    do {
+      OrderItem oi;
+      oi.expr = parse_expr();
+      if (match_kw("DESC")) oi.asc = false;
+      else match_kw("ASC");
+      st.order.push_back(std::move(oi));
+    } while (match_sym(","));
+  }
+
   Stmt parse_select() {
     Stmt st;
     st.kind = Stmt::SELECT;
@@ -941,16 +954,7 @@ class Parser {
     if (match_kw("FROM")) {
       st.table = ident();
       if (match_kw("WHERE")) st.where = parse_expr();
-      if (match_kw("ORDER")) {
-        expect_kw("BY");
-        do {
-          OrderItem oi;
-          oi.expr = parse_expr();
-          if (match_kw("DESC")) oi.asc = false;
-          else match_kw("ASC");
-          st.order.push_back(std::move(oi));
-        } while (match_sym(","));
-      }
+      parse_order_by(st);
     }
     if (match_kw("LIMIT")) {
       int64_t a = int_lit();
@@ -979,6 +983,7 @@ class Parser {
       st.sets.emplace_back(c, parse_expr());
     } while (match_sym(","));
     if (match_kw("WHERE")) st.where = parse_expr();
+    parse_order_by(st);
     if (match_kw("LIMIT")) st.limit = int_lit();
     return st;
   }
@@ -1953,6 +1958,20 @@ class DB {
     return true;
   }
 
+  void order_hits(Table &t, const Stmt &st, std::vector<size_t> &hits) {
+    if (st.order.empty()) return;
+    std::stable_sort(hits.begin(), hits.end(), [&](size_t a, size_t b) {
+      const Row &ra = t.rows[a], &rb = t.rows[b];
+      for (const auto &oi : st.order) {
+        Value va = eval(oi.expr, t, ra);
+        Value vb = eval(oi.expr, t, rb);
+        int c = value_cmp(va, vb);
+        if (c != 0) return oi.asc ? (c < 0) : (c > 0);
+      }
+      return ra.vals[(size_t)t.pk].i < rb.vals[(size_t)t.pk].i;
+    });
+  }
+
   int64_t update_rows(const Stmt &st, const std::string &raw, bool recovering) {
     Table &t = table(st.table);
     std::vector<std::pair<int, ExprP>> assigns;
@@ -1972,6 +1991,7 @@ class DB {
       if (t.rows[i].deleted) continue;
       if (where_matches(st.where, t, t.rows[i])) hits.push_back(i);
     }
+    order_hits(t, st, hits);
     if (st.limit >= 0 && (uint64_t)st.limit < hits.size())
       hits.resize((size_t)st.limit);
     std::vector<Row> news;
@@ -2008,6 +2028,7 @@ class DB {
       if (t.rows[i].deleted) continue;
       if (where_matches(st.where, t, t.rows[i])) hits.push_back(i);
     }
+    order_hits(t, st, hits);
     if (st.limit >= 0 && (uint64_t)st.limit < hits.size())
       hits.resize((size_t)st.limit);
     if (!in_tx_ && !recovering) wal_commit_one(raw);
