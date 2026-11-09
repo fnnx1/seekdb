@@ -15,6 +15,9 @@ python3 tests/test_minivector.py
 echo "== protocol tests =="
 python3 tests/protocol_test.py
 
+echo "== official public mysqltest cases =="
+python3 tests/run_public_cases.py
+
 echo "== fuzz smoke =="
 python3 tests/fuzz_smoke.py
 
