@@ -595,6 +595,7 @@ struct Stmt {
     COMMIT,
     ROLLBACK,
     CREATE_INDEX,
+    DROP_INDEX,
     DROP_TABLE,
     SHOW_TABLES,
     TRUNCATE,
@@ -692,6 +693,10 @@ class Parser {
       if (match_kw("VECTOR")) {
         expect_kw("INDEX");
         st.kind = Stmt::CREATE_INDEX;
+        if (match_kw("IF")) {
+          expect_kw("NOT");
+          expect_kw("EXISTS");
+        }
         st.index_name = ident();
         expect_kw("ON");
         st.table = ident();
@@ -702,6 +707,10 @@ class Parser {
       }
       if (match_kw("INDEX")) {
         st.kind = Stmt::CREATE_INDEX;
+        if (match_kw("IF")) {
+          expect_kw("NOT");
+          expect_kw("EXISTS");
+        }
         st.index_name = ident();
         expect_kw("ON");
         st.table = ident();
@@ -717,6 +726,14 @@ class Parser {
         if (match_kw("IF")) expect_kw("EXISTS");
         ident();
         st.kind = Stmt::OTHER;
+        return st;
+      }
+      if (match_kw("INDEX")) {
+        st.kind = Stmt::DROP_INDEX;
+        if (match_kw("IF")) expect_kw("EXISTS");
+        st.index_name = ident();
+        expect_kw("ON");
+        st.table = ident();
         return st;
       }
       expect_kw("TABLE");
@@ -1226,6 +1243,11 @@ class DB {
           (void)t;
           col_index(t, st.index_col);
         }
+        out = ok(0);
+        break;
+      case Stmt::DROP_INDEX:
+        // The exact engine has no physical index to drop; validate the table.
+        (void)table(st.table);
         out = ok(0);
         break;
       case Stmt::INSERT: {

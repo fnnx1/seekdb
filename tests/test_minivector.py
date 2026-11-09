@@ -188,6 +188,22 @@ def test_errors_schema():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_index_maintenance():
+    d = fresh()
+    try:
+        run("CREATE TABLE t (id BIGINT PRIMARY KEY, v VECTOR(2));"
+            "CREATE VECTOR INDEX IF NOT EXISTS idx ON t(v);"
+            "INSERT INTO t VALUES (1,'[1,2]'),(2,'[3,4]');", d)
+        assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[1,2]') LIMIT 1;", d) == ["id", "1"]
+        run("UPDATE t SET v='[0,0]' WHERE id=2;", d)
+        assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[0,0]') LIMIT 1;", d) == ["id", "2"]
+        run("DROP INDEX IF EXISTS idx ON t;", d)
+        assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[1,2]') LIMIT 1;", d) == ["id", "1"]
+        run("CREATE INDEX idx2 ON t(v); DROP INDEX idx2 ON t;", d)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_like_filter():
     d = fresh()
     try:
