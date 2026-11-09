@@ -188,6 +188,21 @@ def test_errors_schema():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_in_between_not():
+    d = fresh()
+    try:
+        run("CREATE TABLE t (id BIGINT PRIMARY KEY, name VARCHAR(10));"
+            "INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d');", d)
+        assert sel("SELECT id FROM t WHERE id IN (1,3) ORDER BY id;", d) == ["id", "1", "3"]
+        assert sel("SELECT id FROM t WHERE id BETWEEN 2 AND 3 ORDER BY id;", d) == ["id", "2", "3"]
+        assert sel("SELECT id FROM t WHERE name IN ('a','c') ORDER BY id;", d) == ["id", "1", "3"]
+        assert sel("SELECT id FROM t WHERE NOT id=2 ORDER BY id;", d) == ["id", "1", "3", "4"]
+        assert sel("SELECT id FROM t WHERE NOT (id=2) ORDER BY id;", d) == ["id", "1", "3", "4"]
+        assert sel("SELECT id FROM t WHERE id BETWEEN 2 AND 4 AND name LIKE 'c%' ORDER BY id;", d) == ["id", "3"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_index_maintenance():
     d = fresh()
     try:

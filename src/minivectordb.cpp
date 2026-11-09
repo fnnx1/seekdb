@@ -567,11 +567,12 @@ struct Expr;
 using ExprP = std::shared_ptr<Expr>;
 
 struct Expr {
-  enum Kind { COL, LIT, L2, CMP, AND, OR, NOT } kind = LIT;
+  enum Kind { COL, LIT, L2, CMP, AND, OR, NOT, IN, BETWEEN } kind = LIT;
   std::string name;  // column name or comparison operator
   Value lit;
   std::vector<float> vec;
-  ExprP a, b;
+  ExprP a, b, c;
+  std::vector<ExprP> list;
 };
 
 struct SelectItem {
@@ -1005,6 +1006,12 @@ class Parser {
   }
 
   ExprP parse_cmp() {
+    if (match_kw("NOT")) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::NOT;
+      e->a = parse_cmp();
+      return e;
+    }
     ExprP a = parse_primary();
     if (match_kw("LIKE")) {
       auto e = std::make_shared<Expr>();
@@ -1012,6 +1019,28 @@ class Parser {
       e->name = "LIKE";
       e->a = a;
       e->b = parse_primary();
+      return e;
+    }
+    if (match_kw("IN")) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::IN;
+      e->a = a;
+      expect_sym("(");
+      if (!match_sym(")")) {
+        do {
+          e->list.push_back(parse_primary());
+        } while (match_sym(","));
+        expect_sym(")");
+      }
+      return e;
+    }
+    if (match_kw("BETWEEN")) {
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::BETWEEN;
+      e->a = a;
+      e->b = parse_primary();
+      expect_kw("AND");
+      e->c = parse_primary();
       return e;
     }
     if (tok_.kind == Token::SYMBOL &&
@@ -1419,6 +1448,27 @@ class DB {
         Value out;
         out.type = VT_DOUBLE;
         out.d = std::sqrt(sum);
+        return out;
+      }
+      case Expr::IN: {
+        Value a = eval(e->a, t, r);
+        Value out;
+        out.type = VT_BIGINT;
+        out.i = 0;
+        for (const auto &item : e->list) {
+          Value b = eval(item, t, r);
+          if (value_cmp(a, b) == 0) {
+            out.i = 1;
+            break;
+          }
+        }
+        return out;
+      }
+      case Expr::BETWEEN: {
+        Value a = eval(e->a, t, r), lo = eval(e->b, t, r), hi = eval(e->c, t, r);
+        Value out;
+        out.type = VT_BIGINT;
+        out.i = (value_cmp(a, lo) >= 0 && value_cmp(a, hi) <= 0) ? 1 : 0;
         return out;
       }
       case Expr::CMP: {
