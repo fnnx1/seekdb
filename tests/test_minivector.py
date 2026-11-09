@@ -188,6 +188,24 @@ def test_errors_schema():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_show_tables_and_truncate():
+    d = fresh()
+    try:
+        run("CREATE TABLE a (id BIGINT PRIMARY KEY);"
+            "CREATE TABLE b (id BIGINT PRIMARY KEY);"
+            "INSERT INTO a VALUES (1),(2);", d)
+        assert sel("SHOW TABLES;", d) == ["Tables_in_test", "a", "b"]
+        assert sel("SHOW TABLES LIKE 'a%';", d) == ["Tables_in_test", "a"]
+        run("TRUNCATE TABLE a;", d)
+        assert sel("SELECT id FROM a;", d) == ["id"]
+        run("INSERT INTO a VALUES (3);", d)
+        assert sel("SELECT id FROM a;", d) == ["id", "3"]
+        run("DROP TABLE b;", d)
+        assert sel("SHOW TABLES;", d) == ["Tables_in_test", "a"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_if_exists_index():
     d = fresh()
     try:

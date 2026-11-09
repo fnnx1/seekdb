@@ -62,6 +62,27 @@ static bool starts_with_ci(const std::string &s, const char *p) {
   return true;
 }
 
+static bool like_match(const std::string &s, const std::string &p) {
+  size_t si = 0, pi = 0;
+  size_t star = std::string::npos, match = 0;
+  while (si < s.size()) {
+    if (pi < p.size() && (p[pi] == '_' || p[pi] == s[si])) {
+      ++si;
+      ++pi;
+    } else if (pi < p.size() && p[pi] == '%') {
+      star = pi++;
+      match = si;
+    } else if (star != std::string::npos) {
+      pi = star + 1;
+      si = ++match;
+    } else {
+      return false;
+    }
+  }
+  while (pi < p.size() && p[pi] == '%') ++pi;
+  return pi == p.size();
+}
+
 struct SqlError : std::runtime_error {
   int code;
   std::string state;
@@ -575,6 +596,8 @@ struct Stmt {
     ROLLBACK,
     CREATE_INDEX,
     DROP_TABLE,
+    SHOW_TABLES,
+    TRUNCATE,
     OTHER
   } kind = OTHER;
 
@@ -584,6 +607,7 @@ struct Stmt {
   int vec = -1;
   bool if_not_exists = false;
   bool if_exists = false;
+  std::string like;
   std::string index_name, index_col;
 
   std::vector<std::string> insert_cols;
@@ -729,6 +753,24 @@ class Parser {
     }
     if (match_kw("ROLLBACK")) {
       st.kind = Stmt::ROLLBACK;
+      return st;
+    }
+    if (match_kw("SHOW")) {
+      if (match_kw("TABLES")) {
+        st.kind = Stmt::SHOW_TABLES;
+        if (match_kw("LIKE")) {
+          if (tok_.kind != Token::STRING) throw syntax("expected string after LIKE");
+          st.like = tok_.text;
+          adv();
+        }
+        return st;
+      }
+      throw syntax("unsupported SHOW statement");
+    }
+    if (match_kw("TRUNCATE")) {
+      match_kw("TABLE");
+      st.kind = Stmt::TRUNCATE;
+      st.table = ident();
       return st;
     }
     if (match_kw("SET") || match_kw("USE")) {
@@ -1135,6 +1177,24 @@ class DB {
       }
       case Stmt::ROLLBACK: {
         if (in_tx_) rollback_tx();
+        out = ok(0);
+        break;
+      }
+      case Stmt::SHOW_TABLES: {
+        out = "Tables_in_test\n";
+        for (const auto &kv : tables_) {
+          if (!st.like.empty() && !like_match(kv.first, st.like)) continue;
+          out += kv.first;
+          out.push_back('\n');
+        }
+        break;
+      }
+      case Stmt::TRUNCATE: {
+        if (in_tx_) commit_tx();
+        Table &t = table(st.table);
+        if (!rec) wal_commit_one(raw);
+        t.rows.clear();
+        t.pkmap.clear();
         out = ok(0);
         break;
       }
