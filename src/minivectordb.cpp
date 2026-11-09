@@ -1106,8 +1106,9 @@ class DB {
       wal_ = nullptr;
     }
     std::string err;
-    save_snapshot(err);
-    truncate_wal_file();
+    // Keep the WAL if the snapshot could not be written; it is the only
+    // durable copy of commits newer than the last snapshot.
+    if (save_snapshot(err)) truncate_wal_file();
     for (auto &kv : tables_) kv.second.vecs.release();
   }
 

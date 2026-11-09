@@ -144,6 +144,23 @@ def test_crash():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_vector_crash_and_restart():
+    d = fresh()
+    try:
+        run("CREATE TABLE t (id BIGINT PRIMARY KEY, v VECTOR(2));"
+            "INSERT INTO t VALUES (1,'[1,2]'),(2,'[3,4]');", d)
+        crash("BEGIN; INSERT INTO t VALUES (3,'[5,6]'); COMMIT;", d)
+        assert sel("SELECT id FROM t ORDER BY id;", d) == ["id", "1", "2", "3"]
+        crash("BEGIN; INSERT INTO t VALUES (4,'[7,8]');", d)
+        assert sel("SELECT id FROM t ORDER BY id;", d) == ["id", "1", "2", "3"]
+        crash("UPDATE t SET v='[9,9]' WHERE id=1;", d)
+        assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[9,9]') LIMIT 1;", d) == ["id", "1"]
+        crash("BEGIN; UPDATE t SET v='[0,0]' WHERE id=2;", d)
+        assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[3,4]') LIMIT 1;", d) == ["id", "2"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_close_rollback():
     d = fresh()
     try:
