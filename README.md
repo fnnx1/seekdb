@@ -78,10 +78,15 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
 
 ## Design
 
-- **Storage layout:** rows are kept in memory; primary key is indexed by a
-  hash map. A binary snapshot (`/data/snapshot.bin`) stores table schemas and
-  live rows. A write-ahead log (`/data/wal.bin`) records committed SQL
-  statements with length, sequence number and CRC32.
+- **Storage layout:** row metadata (primary key, strings and vector
+  references) is kept in memory; vector payloads live in a per-table
+  file-backed store. The first 64 MiB of a vector store is `mmap`-ed for fast
+  scans; larger stores switch to `pread`/`pwrite`, so the vector payload does
+  not inflate anonymous RSS. A binary snapshot (`/data/snapshot.bin`) stores
+  schemas and live rows, and a write-ahead log (`/data/wal.bin`) records
+  committed SQL statements with length, sequence number and CRC32. The vector
+  file is a derived cache: the snapshot/WAL are the source of truth and the
+  cache is rebuilt on startup.
 - **Vector search:** exact L2 scan over the filtered row set. TopK is produced
   by sorting on distance and then primary key. `CREATE VECTOR INDEX` is
   accepted as a no-op because exact search is available; this guarantees
@@ -98,13 +103,20 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
   writes a snapshot and truncates the WAL. `SIGTERM`/`SIGINT` trigger the same
   graceful close; `SIGKILL` is recovered from the WAL.
 - **Resource use:** the process uses only the C++ standard library, does not
-  spawn worker processes or threads, and does not listen on any port.
+  spawn worker processes or threads, and does not listen on any port. On this
+  machine, 1,000,000 rows x 128 dimensions peaks at about 370 MiB RSS
+  (insert and restart) instead of keeping 512 MiB of vector payloads on the
+  heap; the snapshot is about 526 MiB on disk.
 
 ## Limitations
 
-- The row store is currently in-memory. It is sized for the published small
-  benchmark; a disk-backed row store is future work if the hidden tests
-  exceed the memory limit.
+- Row metadata and the snapshot as a whole are still in memory/page cache;
+  the vector payload is off-heap. A dataset whose *row metadata* exceeds the
+  memory limit would still need a fully paged row store.
+- The vector file is append-only between snapshots; repeated updates can grow
+  it until the next restart/compaction.
+- The snapshot duplicates the vector payload once on disk; a very large
+  dataset needs disk for both the snapshot and the transient vector file.
 - Approximate indexing is not implemented; exact scans satisfy the recall
   requirement but may rank lower on the large ANN benchmark.
 - The SQL parser covers the documented subset; vendor-specific syntax is not
@@ -120,4 +132,6 @@ python3 tests/test_minivector.py
 The dynamic suite covers creation, insert/select/update/delete, filtered
 vector TopK, tie-breaking, transactions and rollback, restart persistence,
 `SIGKILL` recovery, graceful-close rollback, error handling, `IF EXISTS`,
-`CREATE VECTOR INDEX`, and a 10k-row performance smoke test.
+`CREATE VECTOR INDEX`, and a 10k-row performance smoke test. The separate
+`tests/large_data_test.py` loads 100k x 128D, checks exact TopK, restarts and
+records peak RSS.

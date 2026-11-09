@@ -102,6 +102,22 @@ def test_tx():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_vector_update_rollback_restart():
+    d = fresh()
+    try:
+        run("CREATE TABLE t (id BIGINT PRIMARY KEY, v VECTOR(2));"
+            "INSERT INTO t VALUES (1,'[1,2]'),(2,'[3,4]');", d)
+        # transaction update then rollback: id 1 must still be the old vector
+        run("BEGIN; UPDATE t SET v='[9,9]' WHERE id=1; ROLLBACK;", d)
+        assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[1,2]') LIMIT 1;", d) == ["id", "1"]
+        # committed vector update survives restart
+        run("UPDATE t SET v='[0,0]' WHERE id=2;", d)
+        assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[0,0]') LIMIT 1;", d) == ["id", "2"]
+        assert sel("SELECT id,v FROM t WHERE id=2;", d) == ["id\tv", "2\t[0,0]"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_restart():
     d = fresh()
     try:

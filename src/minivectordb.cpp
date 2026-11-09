@@ -26,6 +26,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -132,13 +133,177 @@ struct Value {
   int64_t i = 0;
   double d = 0.0;
   std::string s;
+  // Owned vector (SQL literal / query materialization).
   std::vector<float> v;
+  // Stored vector reference: valid when vdisk is true; `v` stays empty.
+  uint64_t voff = 0;
+  uint32_t vlen = 0;
+  bool vdisk = false;
 };
 
 struct Column {
   std::string name;
   int type = VT_BIGINT;
   int len = 0;  // varchar char limit or vector dimension
+};
+
+// File-backed vector storage.  The vector file is a derived cache: the
+// snapshot/WAL remain the source of truth and rebuild it on startup.  Small
+// files are mmap'd for query speed; after MMAP_LIMIT bytes the store switches
+// to pread/pwrite so a large dataset does not inflate anonymous RSS.
+class VectorStore {
+ public:
+  VectorStore() = default;
+  ~VectorStore() { release(); }
+  VectorStore(const VectorStore &) = delete;
+  VectorStore &operator=(const VectorStore &) = delete;
+  VectorStore(VectorStore &&o) noexcept { steal(o); }
+  VectorStore &operator=(VectorStore &&o) noexcept {
+    if (this != &o) {
+      release();
+      steal(o);
+    }
+    return *this;
+  }
+
+  void init(const std::string &dir, const std::string &table, int dim) {
+    release();
+    dim_ = dim;
+    if (dim_ <= 0) throw SqlError(1105, "HY000", "invalid vector dimension");
+    path_ = (fs::path(dir) / ("vec_" + hexname(table) + ".bin")).string();
+    fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (fd_ < 0)
+      throw SqlError(1105, "HY000", "cannot create vector store " + path_);
+    end_ = 0;
+    mapped_ = 0;
+    chunks_.clear();
+  }
+
+  // Copy an owned vector into the file and return a stored reference.
+  Value store(const Value &v) {
+    if (v.type != VT_VECTOR)
+      throw SqlError(1366, "22007", "Incorrect vector value");
+    if (v.vdisk) {
+      if ((int)v.vlen != dim_)
+        throw SqlError(1366, "22007", "Vector dimension mismatch");
+      return v;
+    }
+    if ((int)v.v.size() != dim_)
+      throw SqlError(1366, "22007", "Vector dimension mismatch");
+    size_t bytes = (size_t)dim_ * sizeof(float);
+    uint64_t off = end_;
+    if (off + bytes <= kMmapLimit) {
+      size_t ci = (size_t)(off / chunk_);
+      size_t within = (size_t)(off % chunk_);
+      while (chunks_.size() <= ci) {
+        uint64_t coff = (uint64_t)chunks_.size() * chunk_;
+        if (::ftruncate(fd_, (off_t)(coff + chunk_)) != 0)
+          throw SqlError(1105, "HY000", "vector store ftruncate failed");
+        void *p = ::mmap(nullptr, chunk_, PROT_READ | PROT_WRITE, MAP_SHARED,
+                         fd_, (off_t)coff);
+        if (p == MAP_FAILED)
+          throw SqlError(1105, "HY000", "vector store mmap failed");
+        chunks_.push_back(p);
+      }
+      std::memcpy((char *)chunks_[ci] + within, v.v.data(), bytes);
+      mapped_ = std::max(mapped_, off + bytes);
+    } else {
+      ssize_t w = ::pwrite(fd_, v.v.data(), bytes, (off_t)off);
+      if (w != (ssize_t)bytes)
+        throw SqlError(1105, "HY000", "vector store write failed");
+    }
+    end_ = off + bytes;
+    Value out;
+    out.type = VT_VECTOR;
+    out.vdisk = true;
+    out.voff = off;
+    out.vlen = (uint32_t)dim_;
+    return out;
+  }
+
+  const float *get(const Value &v, std::vector<float> &scratch) const {
+    size_t bytes = (size_t)dim_ * sizeof(float);
+    if (!v.vdisk) {
+      if ((int)v.v.size() != dim_)
+        throw SqlError(1366, "22007", "Vector dimension mismatch");
+      return v.v.data();
+    }
+    if (v.voff + bytes <= mapped_ && !chunks_.empty()) {
+      size_t ci = (size_t)(v.voff / chunk_);
+      size_t within = (size_t)(v.voff % chunk_);
+      if (ci < chunks_.size())
+        return (const float *)((const char *)chunks_[ci] + within);
+    }
+    scratch.resize((size_t)dim_);
+    ssize_t r = ::pread(fd_, scratch.data(), bytes, (off_t)v.voff);
+    if (r != (ssize_t)bytes)
+      throw SqlError(1105, "HY000", "vector store read failed");
+    return scratch.data();
+  }
+
+  Value materialize(const Value &v) const {
+    if (!v.vdisk) return v;
+    std::vector<float> scratch;
+    const float *p = get(v, scratch);
+    Value out;
+    out.type = VT_VECTOR;
+    out.v.assign(p, p + dim_);
+    return out;
+  }
+
+  void release() {
+    for (void *p : chunks_)
+      if (p && p != MAP_FAILED) ::munmap(p, chunk_);
+    chunks_.clear();
+    if (fd_ >= 0) {
+      ::close(fd_);
+      fd_ = -1;
+    }
+    if (!path_.empty()) {
+      ::unlink(path_.c_str());
+      path_.clear();
+    }
+    end_ = 0;
+    mapped_ = 0;
+    dim_ = 0;
+  }
+
+ private:
+  static constexpr uint64_t kMmapLimit = 64ull * 1024 * 1024;
+  size_t chunk_ = 64ull * 1024 * 1024;
+  int fd_ = -1;
+  int dim_ = 0;
+  uint64_t end_ = 0;
+  uint64_t mapped_ = 0;
+  std::vector<void *> chunks_;
+  std::string path_;
+
+  static std::string hexname(const std::string &s) {
+    static const char *h = "0123456789abcdef";
+    std::string r;
+    for (unsigned char c : s) {
+      r.push_back(h[c >> 4]);
+      r.push_back(h[c & 15]);
+    }
+    if (r.empty()) r = "empty";
+    return r;
+  }
+
+  void steal(VectorStore &o) noexcept {
+    fd_ = o.fd_;
+    dim_ = o.dim_;
+    end_ = o.end_;
+    mapped_ = o.mapped_;
+    chunk_ = o.chunk_;
+    chunks_ = std::move(o.chunks_);
+    path_ = std::move(o.path_);
+    o.fd_ = -1;
+    o.dim_ = 0;
+    o.end_ = 0;
+    o.mapped_ = 0;
+    o.chunks_.clear();
+    o.path_.clear();
+  }
 };
 
 struct Row {
@@ -153,6 +318,7 @@ struct Table {
   int vec = -1;
   std::vector<Row> rows;
   std::unordered_map<int64_t, size_t> pkmap;
+  VectorStore vecs;
 };
 
 static std::string fmt_double(double d) {
@@ -185,7 +351,7 @@ static std::string fmt_value(const Value &v) {
     case VT_VARCHAR:
       return v.s;
     case VT_VECTOR:
-      return fmt_vector(v.v);
+      return v.vdisk ? std::string("[...]") : fmt_vector(v.v);
     case VT_DOUBLE:
       return fmt_double(v.d);
     default:
@@ -942,6 +1108,7 @@ class DB {
     std::string err;
     save_snapshot(err);
     truncate_wal_file();
+    for (auto &kv : tables_) kv.second.vecs.release();
   }
 
   // Execute one statement.  On success, out is the on-wire response text.
@@ -1088,26 +1255,37 @@ class DB {
       return r;
     }
     if (c.type == VT_VECTOR) {
-      std::vector<float> vv;
       if (v.type == VT_VECTOR) {
-        vv = v.v;
-      } else if (v.type == VT_VARCHAR) {
+        size_t n = v.vdisk ? (size_t)v.vlen : v.v.size();
+        if ((int)n != c.len)
+          throw SqlError(1366, "22007",
+                         "Vector dimension mismatch for column '" + c.name + "'");
+        if (!v.vdisk) {
+          for (float x : v.v) {
+            if (!std::isfinite(x))
+              throw SqlError(1366, "22007", "Vector component is not finite");
+          }
+        }
+        return v;
+      }
+      if (v.type == VT_VARCHAR) {
+        std::vector<float> vv;
         std::string er;
         if (!parse_vector_string(v.s, vv, er))
           throw SqlError(1366, "22007", "Incorrect vector value: " + er);
-      } else {
-        throw SqlError(1366, "22007", "Incorrect vector value");
+        if ((int)vv.size() != c.len)
+          throw SqlError(1366, "22007",
+                         "Vector dimension mismatch for column '" + c.name + "'");
+        for (float x : vv) {
+          if (!std::isfinite(x))
+            throw SqlError(1366, "22007", "Vector component is not finite");
+        }
+        Value out;
+        out.type = VT_VECTOR;
+        out.v = std::move(vv);
+        return out;
       }
-      if ((int)vv.size() != c.len)
-        throw SqlError(1366, "22007", "Vector dimension mismatch for column '" + c.name + "'");
-      for (float x : vv) {
-        if (!std::isfinite(x))
-          throw SqlError(1366, "22007", "Vector component is not finite");
-      }
-      Value out;
-      out.type = VT_VECTOR;
-      out.v = std::move(vv);
-      return out;
+      throw SqlError(1366, "22007", "Incorrect vector value");
     }
     throw SqlError(1105, "HY000", "unsupported column type");
   }
@@ -1137,11 +1315,13 @@ class DB {
         const Value &v = r.vals[(size_t)idx];
         if (v.type != VT_VECTOR)
           throw SqlError(1366, "22007", "L2_DISTANCE needs a VECTOR column");
-        if (v.v.size() != e->vec.size())
+        size_t n = v.vdisk ? (size_t)v.vlen : v.v.size();
+        if (n != e->vec.size())
           throw SqlError(1366, "22007", "Vector dimension mismatch");
+        std::vector<float> scratch;
+        const float *p = t.vecs.get(v, scratch);
         double sum = 0;
-        const float *p = v.v.data();
-        for (size_t i = 0; i < v.v.size(); ++i) {
+        for (size_t i = 0; i < n; ++i) {
           double d = (double)p[i] - (double)e->vec[i];
           sum += d * d;
         }
@@ -1319,7 +1499,19 @@ class DB {
       ok = ok && put_u64(f, live);
       for (const auto &r : t.rows) {
         if (r.deleted) continue;
-        for (const auto &v : r.vals) ok = ok && put_value(f, v);
+        for (size_t ci = 0; ci < r.vals.size(); ++ci) {
+          const Value &v = r.vals[ci];
+          if (v.type == VT_VECTOR && v.vdisk) {
+            try {
+              Value mv = t.vecs.materialize(v);
+              ok = ok && put_value(f, mv);
+            } catch (const std::exception &e) {
+              ok = false;
+            }
+          } else {
+            ok = ok && put_value(f, v);
+          }
+        }
       }
       if (!ok) break;
     }
@@ -1386,6 +1578,15 @@ class DB {
       }
       t.pk = pk;
       t.vec = vec;
+      if (t.vec >= 0) {
+        try {
+          t.vecs.init(dir_, t.name, t.cols[(size_t)t.vec].len);
+        } catch (const std::exception &e) {
+          std::fclose(f);
+          err = std::string("vector store init failed: ") + e.what();
+          return false;
+        }
+      }
       uint64_t nrow = 0;
       if (!get_u64(f, nrow) || nrow > 1000000000ull) {
         std::fclose(f);
@@ -1396,11 +1597,20 @@ class DB {
       for (uint64_t ri = 0; ri < nrow; ++ri) {
         Row r;
         r.vals.resize(nc);
-        for (auto &v : r.vals) {
-          if (!get_value(f, v)) {
+        for (size_t ci = 0; ci < r.vals.size(); ++ci) {
+          if (!get_value(f, r.vals[ci])) {
             std::fclose(f);
             err = "invalid snapshot row";
             return false;
+          }
+          if (t.cols[ci].type == VT_VECTOR) {
+            try {
+              r.vals[ci] = t.vecs.store(r.vals[ci]);
+            } catch (const std::exception &e) {
+              std::fclose(f);
+              err = std::string("vector snapshot load failed: ") + e.what();
+              return false;
+            }
           }
         }
         if (t.pk >= 0 && (size_t)t.pk < r.vals.size()) {
@@ -1494,6 +1704,7 @@ class DB {
     t.cols = st.cols;
     t.pk = st.pk;
     t.vec = st.vec;
+    if (t.vec >= 0) t.vecs.init(dir_, t.name, t.cols[(size_t)t.vec].len);
     tables_[st.table] = std::move(t);
   }
 
@@ -1504,6 +1715,7 @@ class DB {
       throw SqlError(1051, "42S02", "Unknown table '" + st.table + "'");
     }
     if (!recovering) wal_commit_one(raw);
+    it->second.vecs.release();
     tables_.erase(it);
   }
 
@@ -1534,7 +1746,14 @@ class DB {
       for (size_t i = 0; i < t.cols.size(); ++i) r.vals[i] = default_value(t.cols[i]);
       for (size_t i = 0; i < target.size(); ++i) {
         Value v = eval(src[i], t, Row{});
-        r.vals[(size_t)target[i]] = coerce(v, t.cols[(size_t)target[i]]);
+        const Column &col = t.cols[(size_t)target[i]];
+        Value cv = coerce(v, col);
+        if (col.type == VT_VECTOR && !cv.vdisk) cv = t.vecs.store(cv);
+        r.vals[(size_t)target[i]] = std::move(cv);
+      }
+      for (size_t i = 0; i < t.cols.size(); ++i) {
+        if (t.cols[i].type == VT_VECTOR && !r.vals[i].vdisk)
+          r.vals[i] = t.vecs.store(r.vals[i]);
       }
       int64_t key = r.vals[(size_t)t.pk].i;
       if (t.pkmap.count(key) || newkeys.count(key))
@@ -1580,7 +1799,10 @@ class DB {
       Row nr = t.rows[idx];
       for (auto &a : assigns) {
         Value v = eval(a.second, t, t.rows[idx]);
-        nr.vals[(size_t)a.first] = coerce(v, t.cols[(size_t)a.first]);
+        const Column &col = t.cols[(size_t)a.first];
+        Value cv = coerce(v, col);
+        if (col.type == VT_VECTOR && !cv.vdisk) cv = t.vecs.store(cv);
+        nr.vals[(size_t)a.first] = std::move(cv);
       }
       news.push_back(std::move(nr));
     }
@@ -1708,16 +1930,18 @@ class DB {
         };
         std::vector<Cand> cands;
         cands.reserve(matches.size());
+        std::vector<float> scratch;
         for (size_t idx : matches) {
           const Row &r = t.rows[idx];
           const Value &v = r.vals[(size_t)vcol];
           if (v.type != VT_VECTOR)
             throw SqlError(1366, "22007", "L2_DISTANCE needs a VECTOR column");
-          if (v.v.size() != oe.vec.size())
+          size_t n = v.vdisk ? (size_t)v.vlen : v.v.size();
+          if (n != oe.vec.size())
             throw SqlError(1366, "22007", "Vector dimension mismatch");
+          const float *p = t.vecs.get(v, scratch);
           double sum = 0;
-          const float *p = v.v.data();
-          for (size_t i = 0; i < v.v.size(); ++i) {
+          for (size_t i = 0; i < n; ++i) {
             double d = (double)p[i] - (double)oe.vec[i];
             sum += d * d;
           }
@@ -1794,6 +2018,7 @@ class DB {
       for (size_t i = 0; i < headers.size(); ++i) {
         if (i) out.push_back('\t');
         Value v = exprs[i] ? eval(*exprs[i], t, r) : r.vals[(size_t)colidx[i]];
+        if (v.type == VT_VECTOR && v.vdisk) v = t.vecs.materialize(v);
         out += fmt_value(v);
       }
       out.push_back('\n');
