@@ -2,10 +2,12 @@
   "meta": {
     "question_id": 600081,
     "question": "轻量向量数据库（MiniVectorDB）",
-    "status": "draft",
+    "status": "student_evidence_added",
     "synthetic": false,
     "language": "zh-CN",
-    "notes": "Working draft. The user must add their own explanations, retests and reflections; agent-owned experiments are context and do not prove student understanding."
+    "notes": "Student learning record integrated 2026-11-09. The 1M-4M figures are prior work-record measurements explicitly not re-run by the student this round; the student re-ran ./scripts/check.sh (19 dynamic, 7 protocol, 5 public, 20K fuzz, 100K large, ASan/UBSan). Agent-owned experiments e1-e7/e10 are context, not student evidence. Public mysqltest 5/5 pass; full official driver is not public.",
+    "public_cases": "mysqltest/ merged (e3355dd); 5/5 PASS via tests/run_public_cases.py",
+    "official_driver": "full test driver / hidden load / performance baseline not published; raw stdin/stdout protocol still needs platform precheck"
   },
   "user_prompts": [
     {
@@ -118,6 +120,54 @@
       "output": "clean build; 11 dynamic tests; 100K large-data test; 7 protocol tests; ASan/UBSan; docker build/run/restart all pass.",
       "student_interpretation": "",
       "status": "observed"
+    },
+    {
+      "id": "e8",
+      "owner": "student",
+      "source": "user",
+      "hypothesis": "UPDATE 的 affected_rows 应按实际变化计数，字符串和向量同值更新都应返回 0。",
+      "command": "在目标分支执行小例子：CREATE; INSERT 2 行; 同值字符串 UPDATE; 同值向量 UPDATE; 变更字符串 UPDATE; 变更向量 UPDATE",
+      "output": "Query OK, 0 rows affected\nQuery OK, 2 rows affected\nQuery OK, 0 rows affected\nQuery OK, 0 rows affected\nQuery OK, 1 row affected\nQuery OK, 1 row affected",
+      "student_interpretation": "第一个 0 是 CREATE；接下来两个 0 是字符串和向量的同值更新，说明同值更新按实际变化计 0；后面两个 1 是真正变化的字符串/向量更新。UPDATE 不能只看 WHERE 命中数，要新旧值逐列比较，向量逐维比较。",
+      "code_references": [
+        {
+          "path": "/tmp/minivectordb-inspect/src/minivectordb.cpp",
+          "line": 1916,
+          "what": "插入计数"
+        },
+        {
+          "path": "/tmp/minivectordb-inspect/src/minivectordb.cpp",
+          "line": 1971,
+          "what": "更新计数与值比较"
+        },
+        {
+          "path": "/tmp/minivectordb-inspect/src/minivectordb.cpp",
+          "line": 2060,
+          "what": "删除计数"
+        }
+      ],
+      "status": "student_verified"
+    },
+    {
+      "id": "e9",
+      "owner": "student",
+      "source": "user",
+      "hypothesis": "目标分支的本地完整检查覆盖核心路径。",
+      "command": "./scripts/check.sh",
+      "output": "19 组动态测试、7 组协议测试、5 组公开用例、20,000 条随机 SQL、100,000 行大数据测试（large_data_test 峰值约 90MB）、ASan/UBSan 全部通过",
+      "student_interpretation": "这是本轮实际重跑的检查；1M-4M 没有在本轮重跑。",
+      "status": "student_verified"
+    },
+    {
+      "id": "e10",
+      "owner": "agent/records",
+      "source": "work record",
+      "hypothesis": "规模、性能与内存的先前测量，用于说明取舍。",
+      "command": "10K/1M/2M/4M 写入与查询；4M SIGKILL 恢复；WAL/向量文件磁盘统计",
+      "output": "10K×128D + 1000 次 exact TopK: 20.95s -> 0.71s; 1M: 写入 375.7MB / 重启 369MB; 2M: 677.1MB / 34.6s; 4M: 1284.0MB / 70.08s; 4M 崩溃恢复 37.93s, WAL 4.15GB, 向量文件 2.05GB",
+      "student_interpretation": "学生明确说明这些是工作区交接记录，不是本轮重跑；本轮重跑的是 100K large 和 check。",
+      "status": "recorded_previous",
+      "notes": "not re-run by the student this round"
     }
   ],
   "retrospective": [
@@ -125,40 +175,135 @@
       "id": "r1",
       "owner": "agent",
       "content": "先确认题目/题包/分支的真实状态，再实现；每日两次提测约束要求在提交前完成构建、协议、SQL、向量、事务、恢复和回归测试。"
+    },
+    {
+      "id": "r2",
+      "owner": "student",
+      "content": "先保 exact 结果和恢复正确，再优化排序与向量载荷内存；ANN 和完全磁盘化的行存留作后续工作。"
+    },
+    {
+      "id": "r3",
+      "owner": "student",
+      "content": "这个项目大致是先把正确性做稳，再找到检索和内存的瓶颈，最后补 SQL 兼容与恢复边界。"
     }
   ],
   "limitations": [
-    "学生本人的解释、复测和反思尚未写入；当前 experiments 的 owner 为 agent，不能作为学生理解证据。",
-    "正式题包/测试驱动尚未发布，stdin/stdout 的精确输出格式和错误码仍需与题包或平台预检对齐。",
-    "行元数据仍在内存；1M/2M 已实测，更大数据仍可能受内存限制。",
-    "近似索引未实现；exact 检索满足 Recall@10，但 ANN 性能榜可能偏低。",
-    "WAL 记录 SQL 文本，大规模写入时 WAL 可能达到 GB 级；快照与 WAL 在磁盘上各占一份。"
+    "1M-4M 数字来自工作区交接记录，学生说明本轮未重跑；本轮学生重跑的是 19 组动态/7 组协议/5 组公开/20K fuzz/100K large/ASan，100K 峰值约 90MB。",
+    "完整官方测试驱动/隐藏负载/性能基线仍未公开；原始 stdin/stdout 协议仍需平台预检验证。",
+    "ANN 未实现；行元数据仍在内存；完全磁盘化行存留作后续工作。",
+    "公开 mysqltest 只是基础用例，5/5 通过不代表正式准入或性能排名。",
+    "agent 的 e1-e7/e10 是上下文，不是学生证据；学生证据见 student_evidence。"
   ],
-  "student_evidence_pending": [
+  "student_evidence": [
     {
+      "id": "se1",
       "dimension": "问题理解与自主拆解",
-      "prompt": "用自己的话说明 MiniVectorDB 必须自己实现哪几层、为什么不能直接套 SQLite/RocksDB/Faiss；给出一个你主动拆解的子问题。",
-      "status": "pending"
+      "student_answer": "我先确认题目要求和分支状态，再搭出自己的 SQL、行存、事务和向量检索骨架。这个项目大致是先把正确性做稳，再找到检索和内存的瓶颈，最后补 SQL 兼容与恢复边界。",
+      "student_quotes": [
+        {
+          "pointer": "/student_evidence/0/student_answer",
+          "quote": "我先确认题目要求和分支状态，再搭出自己的 SQL、行存、事务和向量检索骨架。"
+        },
+        {
+          "pointer": "/student_evidence/0/student_answer",
+          "quote": "这个项目大致是先把正确性做稳，再找到检索和内存的瓶颈，最后补 SQL 兼容与恢复边界。"
+        }
+      ],
+      "result_quotes": [],
+      "status": "student_reported"
     },
     {
+      "id": "se2",
       "dimension": "技术理解与迁移",
-      "prompt": "解释 WAL+快照、undo 回滚和 L2 TopK 的取舍，并说明如果数据超过内存你会怎么改。",
-      "status": "pending"
+      "student_answer": "SQL 的计数路径可以从实际执行路径讲：INSERT 先解析和转换每一行，检查列数、类型和主键重复，再把有效行加到表里，返回插入行数；多行插入如果遇到重复主键，不会只插入前半批。UPDATE 先筛选符合条件的行，再应用 ORDER BY 和 LIMIT，构造新行并逐列比较；返回的是实际发生变化的行数，不是命中行数，同值更新返回 0，向量列也逐维比较。DELETE 返回筛选并应用排序、LIMIT 后实际删除的行数。建表等 DDL 返回 0；输出统一为 Query OK, N row(s) affected。事务期间修改先作用到内存，undo 保存旧行；提交时把事务 SQL 记录到 WAL 并同步；启动先读快照，再回放快照序号之后的完整 WAL 事务，截断尾记录忽略。快照写成功后才截断 WAL；向量存储文件是可重建缓存，真正持久状态来自快照和 WAL。",
+      "student_quotes": [
+        {
+          "pointer": "/student_evidence/1/student_answer",
+          "quote": "UPDATE 先筛选符合条件的行，再应用 ORDER BY 和 LIMIT，构造新行并逐列比较。返回的是实际发生变化的行数，不是命中行数。"
+        },
+        {
+          "pointer": "/student_evidence/1/student_answer",
+          "quote": "快照写成功后才截断 WAL；向量存储文件是可重建缓存，真正持久状态来自快照和 WAL。"
+        }
+      ],
+      "result_quotes": [
+        {
+          "pointer": "/experiments/7/output",
+          "quote": "Query OK, 0 rows affected\nQuery OK, 2 rows affected\nQuery OK, 0 rows affected\nQuery OK, 0 rows affected\nQuery OK, 1 row affected\nQuery OK, 1 row affected"
+        },
+        {
+          "pointer": "/experiments/9/output",
+          "quote": "10K×128D + 1000 次 exact TopK: 20.95s -> 0.71s; 1M: 写入 375.7MB / 重启 369MB; 2M: 677.1MB / 34.6s; 4M: 1284.0MB / 70.08s; 4M 崩溃恢复 37.93s, WAL 4.15GB, 向量文件 2.05GB",
+          "source": "work record, not re-run this round"
+        }
+      ],
+      "status": "student_explained"
     },
     {
+      "id": "se3",
       "dimension": "独立验证与质疑",
-      "prompt": "挑一个 agent 给出的结论，设计并执行一个能证伪它的测试，记录实际输出；说明你是否推翻/修正了它。",
-      "status": "pending"
+      "student_answer": "我刚在目标分支上跑了一个小例子，输出确认字符串和向量的同值更新都计为 0。本轮我在目标分支运行了 ./scripts/check.sh：19 组动态测试、7 组协议测试、5 组公开用例、20,000 条随机 SQL、100,000 行大数据测试和 ASan/UBSan 全部通过。较大的 1M—4M 数字来自工作区交接记录，不是这次重新跑出来的。",
+      "student_quotes": [
+        {
+          "pointer": "/student_evidence/2/student_answer",
+          "quote": "我刚在目标分支上跑了一个小例子，输出确认字符串和向量的同值更新都计为 0。"
+        },
+        {
+          "pointer": "/student_evidence/2/student_answer",
+          "quote": "较大的 1M—4M 数字来自工作区交接记录，不是这次重新跑出来的。"
+        }
+      ],
+      "result_quotes": [
+        {
+          "pointer": "/experiments/7/output",
+          "quote": "Query OK, 0 rows affected\nQuery OK, 2 rows affected\nQuery OK, 0 rows affected\nQuery OK, 0 rows affected\nQuery OK, 1 row affected\nQuery OK, 1 row affected"
+        },
+        {
+          "pointer": "/experiments/8/output",
+          "quote": "19 组动态测试、7 组协议测试、5 组公开用例、20,000 条随机 SQL、100,000 行大数据测试、ASan/UBSan 全部通过"
+        }
+      ],
+      "status": "student_verified"
     },
     {
+      "id": "se4",
       "dimension": "实验与反馈迭代",
-      "prompt": "记录一次失败/回归、你如何定位、修正后复测结果。",
-      "status": "pending"
+      "student_answer": "检索路径一开始以精确结果为目标：先按 WHERE 过滤行，再对候选向量计算 L2 距离，最后按距离和主键排序；并列按主键升序不是小细节，如果比较器只比较距离，结果顺序会不稳定。后来改成每行只计算一次距离，用 nth_element 选出前 K 项再排序；交接记录里的 10K×128D、1000 次 exact TopK 从 20.95 秒降到 0.71 秒。规模上先 10K smoke，再 100K 确认落盘、查询和重启；1M 暴露出全量向量在堆内存的压力，于是把向量载荷移到表级文件，前 64 MiB mmap，超过后 pread/pwrite；1M 写入峰值 375.7 MB、重启 369 MB；2M 677.1 MB、34.6 秒；4M 约 1.28 GB、70.08 秒；4M 崩溃恢复 37.93 秒、Top-10 正确，WAL 约 4.15 GB、向量文件约 2.05 GB。",
+      "student_quotes": [
+        {
+          "pointer": "/student_evidence/3/student_answer",
+          "quote": "后来代码改为每行只计算一次距离，用 nth_element 选出需要的前 K 项，再对这部分排序。"
+        },
+        {
+          "pointer": "/student_evidence/3/student_answer",
+          "quote": "1M×128D 暴露出全量向量留在堆内存里的压力。"
+        }
+      ],
+      "result_quotes": [
+        {
+          "pointer": "/experiments/9/output",
+          "quote": "10K×128D + 1000 次 exact TopK: 20.95s -> 0.71s; 1M: 写入 375.7MB / 重启 369MB; 2M: 677.1MB / 34.6s; 4M: 1284.0MB / 70.08s; 4M 崩溃恢复 37.93s, WAL 4.15GB, 向量文件 2.05GB",
+          "source": "work record, not re-run this round"
+        }
+      ],
+      "status": "student_iterated"
     },
     {
+      "id": "se5",
       "dimension": "取舍与反思",
-      "prompt": "总结性能、内存、磁盘、实现复杂度之间的取舍，以及下次会怎么做。",
-      "status": "pending"
+      "student_answer": "我的主要取舍是先保 exact 结果和恢复正确，再优化排序与向量载荷内存；ANN 和完全磁盘化的行存留作后续工作。这个项目大致是先把正确性做稳，再找到检索和内存的瓶颈，最后补 SQL 兼容与恢复边界。向量载荷移出堆内存后，行元数据仍在内存中，所以优化缓解了向量数据的 RSS，却没有让整个表变成可无限扩展的磁盘行存。",
+      "student_quotes": [
+        {
+          "pointer": "/student_evidence/4/student_answer",
+          "quote": "我的主要取舍是先保 exact 结果和恢复正确，再优化排序与向量载荷内存；ANN 和完全磁盘化的行存留作后续工作。"
+        },
+        {
+          "pointer": "/student_evidence/4/student_answer",
+          "quote": "向量载荷移出堆内存后，行元数据仍在内存中，所以优化缓解了向量数据的 RSS，却没有让整个表变成可无限扩展的磁盘行存。"
+        }
+      ],
+      "result_quotes": [],
+      "status": "student_reflected"
     }
   ]
 }
