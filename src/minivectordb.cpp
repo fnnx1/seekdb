@@ -1140,8 +1140,9 @@ class DB {
         if (v.v.size() != e->vec.size())
           throw SqlError(1366, "22007", "Vector dimension mismatch");
         double sum = 0;
+        const float *p = v.v.data();
         for (size_t i = 0; i < v.v.size(); ++i) {
-          double d = (double)v.v[i] - (double)e->vec[i];
+          double d = (double)p[i] - (double)e->vec[i];
           sum += d * d;
         }
         Value out;
@@ -1694,16 +1695,63 @@ class DB {
       }
     }
     if (!orders.empty()) {
-      std::stable_sort(matches.begin(), matches.end(), [&](size_t a, size_t b) {
-        const Row &ra = t.rows[a], &rb = t.rows[b];
-        for (const auto &oi : orders) {
-          Value va = eval(oi.expr, t, ra);
-          Value vb = eval(oi.expr, t, rb);
-          int c = value_cmp(va, vb);
-          if (c != 0) return oi.asc ? (c < 0) : (c > 0);
+      if (orders.size() == 1 && orders[0].expr &&
+          orders[0].expr->kind == Expr::L2) {
+        // Hot path: exact L2 TopK.  Compute each distance once, then use a
+        // bounded selection for LIMIT instead of sorting with vector copies.
+        const Expr &oe = *orders[0].expr;
+        int vcol = col_index(t, oe.name);
+        struct Cand {
+          double d;
+          int64_t pk;
+          size_t idx;
+        };
+        std::vector<Cand> cands;
+        cands.reserve(matches.size());
+        for (size_t idx : matches) {
+          const Row &r = t.rows[idx];
+          const Value &v = r.vals[(size_t)vcol];
+          if (v.type != VT_VECTOR)
+            throw SqlError(1366, "22007", "L2_DISTANCE needs a VECTOR column");
+          if (v.v.size() != oe.vec.size())
+            throw SqlError(1366, "22007", "Vector dimension mismatch");
+          double sum = 0;
+          const float *p = v.v.data();
+          for (size_t i = 0; i < v.v.size(); ++i) {
+            double d = (double)p[i] - (double)oe.vec[i];
+            sum += d * d;
+          }
+          cands.push_back({std::sqrt(sum), r.vals[(size_t)t.pk].i, idx});
         }
-        return ra.vals[(size_t)t.pk].i < rb.vals[(size_t)t.pk].i;
-      });
+        auto cmp = [&](const Cand &a, const Cand &b) {
+          if (a.d != b.d) return orders[0].asc ? (a.d < b.d) : (a.d > b.d);
+          return a.pk < b.pk;
+        };
+        size_t keep = cands.size();
+        if (st.limit >= 0) {
+          uint64_t want = (uint64_t)st.offset + (uint64_t)st.limit;
+          keep = (size_t)std::min<uint64_t>(want, cands.size());
+        }
+        if (keep < cands.size()) {
+          std::nth_element(cands.begin(), cands.begin() + keep, cands.end(), cmp);
+          cands.resize(keep);
+        }
+        std::sort(cands.begin(), cands.end(), cmp);
+        matches.clear();
+        matches.reserve(cands.size());
+        for (const auto &c : cands) matches.push_back(c.idx);
+      } else {
+        std::stable_sort(matches.begin(), matches.end(), [&](size_t a, size_t b) {
+          const Row &ra = t.rows[a], &rb = t.rows[b];
+          for (const auto &oi : orders) {
+            Value va = eval(oi.expr, t, ra);
+            Value vb = eval(oi.expr, t, rb);
+            int c = value_cmp(va, vb);
+            if (c != 0) return oi.asc ? (c < 0) : (c > 0);
+          }
+          return ra.vals[(size_t)t.pk].i < rb.vals[(size_t)t.pk].i;
+        });
+      }
     }
 
     int64_t off = st.offset;

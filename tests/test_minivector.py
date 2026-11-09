@@ -66,6 +66,9 @@ def test_basic_vector_ties():
             "id", "1", "3"]
         assert sel("SELECT id FROM t WHERE id >= 2 ORDER BY id DESC;", d) == ["id", "3", "2"]
         assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[1,2,3]') LIMIT 1,1;", d) == ["id", "3"]
+        assert sel("SELECT id FROM t ORDER BY L2_DISTANCE(v,'[1,2,3]') DESC LIMIT 2;", d) == ["id", "2", "3"]
+        assert sel("SELECT id, L2_DISTANCE(v,'[1,2,3]') AS d FROM t ORDER BY d LIMIT 2;", d) == [
+            "id\td", "1\t0.000000", "3\t3.741657"]
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
