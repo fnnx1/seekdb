@@ -754,6 +754,7 @@ class Parser {
       st.kind = Stmt::DELETE_;
       st.table = ident();
       if (match_kw("WHERE")) st.where = parse_expr();
+      if (match_kw("LIMIT")) st.limit = int_lit();
       return st;
     }
     if (match_kw("BEGIN")) {
@@ -862,6 +863,8 @@ class Parser {
           expect_kw("NULL");
         } else if (match_kw("UNIQUE")) {
           // accepted, not enforced beyond the primary key
+        } else if (match_kw("AUTO_INCREMENT")) {
+          // accepted for schema compatibility; explicit ids are still used
         } else {
           break;
         }
@@ -976,6 +979,7 @@ class Parser {
       st.sets.emplace_back(c, parse_expr());
     } while (match_sym(","));
     if (match_kw("WHERE")) st.where = parse_expr();
+    if (match_kw("LIMIT")) st.limit = int_lit();
     return st;
   }
 
@@ -1968,6 +1972,8 @@ class DB {
       if (t.rows[i].deleted) continue;
       if (where_matches(st.where, t, t.rows[i])) hits.push_back(i);
     }
+    if (st.limit >= 0 && (uint64_t)st.limit < hits.size())
+      hits.resize((size_t)st.limit);
     std::vector<Row> news;
     news.reserve(hits.size());
     for (size_t idx : hits) {
@@ -2002,6 +2008,8 @@ class DB {
       if (t.rows[i].deleted) continue;
       if (where_matches(st.where, t, t.rows[i])) hits.push_back(i);
     }
+    if (st.limit >= 0 && (uint64_t)st.limit < hits.size())
+      hits.resize((size_t)st.limit);
     if (!in_tx_ && !recovering) wal_commit_one(raw);
     for (size_t idx : hits) {
       Row old = t.rows[idx];
