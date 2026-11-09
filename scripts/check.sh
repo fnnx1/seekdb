@@ -15,6 +15,9 @@ python3 tests/test_minivector.py
 echo "== protocol tests =="
 python3 tests/protocol_test.py
 
+echo "== fuzz smoke =="
+python3 tests/fuzz_smoke.py
+
 echo "== large-data smoke =="
 python3 tests/large_data_test.py
 
