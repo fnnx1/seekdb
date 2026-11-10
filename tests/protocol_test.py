@@ -90,6 +90,22 @@ def test_error_then_continue():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_bigint_min_and_max():
+    d = fresh()
+    try:
+        out = run("CREATE TABLE t (id BIGINT PRIMARY KEY, v BIGINT);"
+                  "INSERT INTO t VALUES (9223372036854775807, -9223372036854775808);"
+                  "SELECT id, v FROM t;\n", d)
+        assert "9223372036854775807" in out, out
+        assert "-9223372036854775808" in out, out
+        out = run("INSERT INTO t VALUES (9223372036854775808, 0);\n", d)
+        assert "ERROR 1064" in out, out
+        out = run("INSERT INTO t VALUES (-9223372036854775809, 0);\n", d)
+        assert "ERROR 1064" in out, out
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_exit_and_eof():
     d = fresh()
     try:

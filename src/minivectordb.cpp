@@ -1454,6 +1454,39 @@ class Parser {
       return e;
     }
     if (match_sym("-")) {
+      // Keep the sign attached to the numeric token so that LLONG_MIN
+      // (-9223372036854775808) is parsed without overflowing the positive
+      // magnitude first.
+      if (tok_.kind == Token::NUMBER) {
+        std::string t = tok_.text;
+        bool is_float = t.find('.') != std::string::npos ||
+                        t.find('e') != std::string::npos ||
+                        t.find('E') != std::string::npos;
+        char *end = nullptr;
+        if (!is_float) {
+          errno = 0;
+          long long v = std::strtoll(("-" + t).c_str(), &end, 10);
+          if (end && *end == '\0' && errno == 0) {
+            adv();
+            auto e = std::make_shared<Expr>();
+            e->kind = Expr::LIT;
+            e->lit.type = VT_BIGINT;
+            e->lit.i = v;
+            return e;
+          }
+        } else {
+          double d = std::strtod(("-" + t).c_str(), &end);
+          if (end && *end == '\0') {
+            adv();
+            auto e = std::make_shared<Expr>();
+            e->kind = Expr::LIT;
+            e->lit.type = VT_DOUBLE;
+            e->lit.d = d;
+            return e;
+          }
+        }
+        throw syntax("invalid integer");
+      }
       ExprP e = parse_primary();
       if (e->kind == Expr::LIT && e->lit.type == VT_BIGINT) e->lit.i = -e->lit.i;
       else if (e->kind == Expr::LIT && e->lit.type == VT_DOUBLE) e->lit.d = -e->lit.d;
