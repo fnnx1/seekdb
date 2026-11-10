@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 # Pre-submission local checks.  Run from the repository root.
 #   ./scripts/check.sh
-#   RUN_DOCKER=1 ./scripts/check.sh   # also build and smoke-test the image
+#   RUN_DOCKER=1 ./scripts/check.sh   # also build and protocol-test the image
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# The original plain-SQL harness is kept as a fast regression suite; the
+# formal submission path is the JSONL protocol exercised below.
+export MVDB_LEGACY_STDIO=1
 
 echo "== clean build =="
 make clean
 make
 
-echo "== dynamic tests =="
+echo "== legacy dynamic tests =="
 python3 tests/test_minivector.py
 
-echo "== protocol tests =="
+echo "== legacy protocol tests =="
 python3 tests/protocol_test.py
-
-echo "== official public mysqltest cases =="
-python3 tests/run_public_cases.py
 
 echo "== fuzz smoke =="
 python3 tests/fuzz_smoke.py
@@ -24,7 +25,7 @@ python3 tests/fuzz_smoke.py
 echo "== large-data smoke =="
 python3 tests/large_data_test.py
 
-echo "== ASan/UBSan tests =="
+echo "== ASan/UBSan legacy tests =="
 SAN_BIN="$(mktemp -u /tmp/minivectordb-san.XXXXXX)"
 trap 'rm -f "$SAN_BIN"' EXIT
 g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
@@ -44,6 +45,19 @@ if [[ "${RUN_TIDY:-0}" == "1" ]]; then
   fi
 fi
 
+unset MVDB_LEGACY_STDIO
+
+echo "== official JSONL handshake (host) =="
+rm -rf protocol-results/check-host-handshake protocol-results/check-host-public
+mkdir -p protocol-results
+CMD="[\"$PWD/minivectordb\",\"{data_dir}\"]"
+python3 protocol_check/run.py --command "$CMD" --handshake-only \
+  --output protocol-results/check-host-handshake
+
+echo "== official JSONL public cases (host) =="
+python3 protocol_check/run.py --command "$CMD" \
+  --output protocol-results/check-host-public
+
 echo "== whitespace/static check =="
 git diff --check
 git diff --cached --check
@@ -51,23 +65,13 @@ git diff --cached --check
 if [[ "${RUN_DOCKER:-0}" == "1" ]]; then
   echo "== docker build =="
   docker build -t minivectordb:check .
-  D="$(mktemp -d /tmp/minivectordb-docker.XXXXXX)"
-  trap 'rm -rf "$D"' EXIT
-  echo "== docker run/restart =="
-  printf "%s\n" \
-    "CREATE TABLE t (id BIGINT PRIMARY KEY, v VECTOR(2));" \
-    "INSERT INTO t VALUES (1,'[1,2]'),(2,'[3,4]');" \
-    "SELECT id FROM t ORDER BY L2_DISTANCE(v,'[1,2]');" \
-    | docker run --rm -i -v "$D:/data" minivectordb:check > "$D/out1.txt"
-  grep -q '^1$' "$D/out1.txt"
-  grep -q '^2$' "$D/out1.txt"
-  printf "SELECT id FROM t ORDER BY id;\n" \
-    | docker run --rm -i -v "$D:/data" minivectordb:check > "$D/out2.txt"
-  grep -q '^1$' "$D/out2.txt"
-  grep -q '^2$' "$D/out2.txt"
-  echo "docker smoke OK"
-  echo "== docker public cases =="
-  USE_DOCKER=1 MVDB_IMAGE=minivectordb:check python3 tests/run_public_cases.py
+  rm -rf protocol-results/check-docker-handshake protocol-results/check-docker-public
+  echo "== official JSONL handshake (Docker) =="
+  python3 protocol_check/run.py --image minivectordb:check --handshake-only \
+    --output protocol-results/check-docker-handshake
+  echo "== official JSONL public cases (Docker) =="
+  python3 protocol_check/run.py --image minivectordb:check \
+    --output protocol-results/check-docker-public
 fi
 
 echo "ALL CHECKS PASSED"

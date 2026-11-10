@@ -5,9 +5,9 @@
     "status": "student_evidence_added",
     "synthetic": false,
     "language": "zh-CN",
-    "notes": "Student learning record integrated 2026-11-09. The 1M-4M figures are prior work-record measurements explicitly not re-run by the student this round; the student re-ran ./scripts/check.sh (19 dynamic, 7 protocol, 5 public, 20K fuzz, 100K large, ASan/UBSan). Agent-owned experiments e1-e7/e10 are context, not student evidence. Public mysqltest 5/5 pass; full official driver is not public.",
-    "public_cases": "mysqltest/ merged (e3355dd); 5/5 PASS via tests/run_public_cases.py",
-    "official_driver": "full test driver / hidden load / performance baseline not published; raw stdin/stdout protocol still needs platform precheck"
+    "notes": "Student learning record integrated 2026-11-09. The 1M-4M figures are prior work-record measurements explicitly not re-run by the student; the student re-ran ./scripts/check.sh at the time. Agent-owned experiments e1-e7/e10 are context, not student evidence. On 2026-11-10 the official STDIO_PROTOCOL.md and protocol_check were published; the engine now implements JSONL (ready/execute/shutdown) and passes the official checker handshake + all 20 public cases on host and Docker. The 9 hidden formal inputs and performance baseline remain internal.",
+    "public_cases": "mysqltest v4 (20 cases/95 SQL) merged; official JSONL checker handshake + 20/20 PASS on host and Docker",
+    "official_driver": "STDIO_PROTOCOL.md and protocol_check published 2026-11-10; JSONL implemented and checked. Formal 29 cases include 9 hidden inputs; performance baseline still internal."
   },
   "user_prompts": [
     {
@@ -189,7 +189,7 @@
   ],
   "limitations": [
     "1M-4M 数字来自工作区交接记录，学生说明本轮未重跑；本轮学生重跑的是 19 组动态/7 组协议/5 组公开/20K fuzz/100K large/ASan，100K 峰值约 90MB。",
-    "完整官方测试驱动/隐藏负载/性能基线仍未公开；原始 stdin/stdout 协议仍需平台预检验证。",
+    "官方 JSONL 协议（STDIO_PROTOCOL.md）与 protocol_check 已公开；host + Docker 20/20 通过。正式 29 个用例中 9 个隐藏输入和性能基线仍未公开，仍需平台预检。",
     "ANN 未实现；行元数据仍在内存；完全磁盘化行存留作后续工作。",
     "公开 mysqltest 只是基础用例，5/5 通过不代表正式准入或性能排名。",
     "agent 的 e1-e7/e10 是上下文，不是学生证据；学生证据见 student_evidence。"

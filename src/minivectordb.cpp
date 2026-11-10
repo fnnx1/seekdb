@@ -560,6 +560,308 @@ class Lexer {
   size_t i_ = 0;
 };
 
+
+// ---------------------------------------------------------------------------
+// Structured execution result and JSONL protocol helpers
+// ---------------------------------------------------------------------------
+struct Result {
+  bool query = false;
+  std::vector<std::string> columns;
+  std::vector<std::vector<Value>> rows;
+  bool has_affected = false;
+  int64_t affected = 0;
+};
+
+static Value vstr(const std::string &s) {
+  Value v;
+  v.type = VT_VARCHAR;
+  v.s = s;
+  return v;
+}
+
+static std::string ok_text(int64_t n) {
+  if (n == 1) return "Query OK, 1 row affected";
+  return "Query OK, " + std::to_string(n) + " rows affected";
+}
+
+static std::string format_legacy(const Result &r) {
+  if (r.query) {
+    std::string out;
+    for (size_t i = 0; i < r.columns.size(); ++i) {
+      if (i) out.push_back('\t');
+      out += r.columns[i];
+    }
+    out.push_back('\n');
+    for (const auto &row : r.rows) {
+      for (size_t i = 0; i < row.size(); ++i) {
+        if (i) out.push_back('\t');
+        out += fmt_value(row[i]);
+      }
+      out.push_back('\n');
+    }
+    return out;
+  }
+  if (r.has_affected) return ok_text(r.affected);
+  return ok_text(0);
+}
+
+static std::string json_escape(const std::string &s) {
+  std::string o;
+  o.reserve(s.size() + 2);
+  o.push_back('"');
+  for (unsigned char c : s) {
+    switch (c) {
+      case '"': o += "\\\""; break;
+      case '\\': o += "\\\\"; break;
+      case '\b': o += "\\b"; break;
+      case '\f': o += "\\f"; break;
+      case '\n': o += "\\n"; break;
+      case '\r': o += "\\r"; break;
+      case '\t': o += "\\t"; break;
+      default:
+        if (c < 0x20) {
+          char b[8];
+          std::snprintf(b, sizeof b, "\\u%04x", c);
+          o += b;
+        } else {
+          o.push_back((char)c);
+        }
+    }
+  }
+  o.push_back('"');
+  return o;
+}
+
+static std::string json_double(double d) {
+  if (!std::isfinite(d)) return "0";
+  char b[64];
+  std::snprintf(b, sizeof b, "%.9g", d);
+  return b;
+}
+
+static std::string json_value(const Value &v) {
+  switch (v.type) {
+    case VT_BIGINT: return std::to_string(v.i);
+    case VT_VARCHAR: return json_escape(v.s);
+    case VT_DOUBLE: return json_double(v.d);
+    case VT_VECTOR: {
+      std::string o = "[";
+      for (size_t i = 0; i < v.v.size(); ++i) {
+        if (i) o.push_back(',');
+        o += json_double(v.v[i]);
+      }
+      o.push_back(']');
+      return o;
+    }
+  }
+  return "null";
+}
+
+static std::string json_result_body(const Result &r) {
+  std::string o;
+  if (r.query) {
+    o += ",\"columns\":[";
+    for (size_t i = 0; i < r.columns.size(); ++i) {
+      if (i) o.push_back(',');
+      o += json_escape(r.columns[i]);
+    }
+    o += "],\"rows\":[";
+    for (size_t i = 0; i < r.rows.size(); ++i) {
+      if (i) o.push_back(',');
+      o.push_back('[');
+      for (size_t j = 0; j < r.rows[i].size(); ++j) {
+        if (j) o.push_back(',');
+        o += json_value(r.rows[i][j]);
+      }
+      o.push_back(']');
+    }
+    o.push_back(']');
+  }
+  if (r.has_affected) o += ",\"affected_rows\":" + std::to_string(r.affected);
+  return o;
+}
+
+// Minimal JSON request parser for the JSONL protocol.
+class JsonReader {
+ public:
+  explicit JsonReader(const std::string &s) : s_(s) {}
+
+  void ws() {
+    while (i_ < s_.size() && (s_[i_] == ' ' || s_[i_] == '\t' || s_[i_] == '\r' || s_[i_] == '\n')) ++i_;
+  }
+  bool eat(char c) {
+    ws();
+    if (i_ < s_.size() && s_[i_] == c) { ++i_; return true; }
+    return false;
+  }
+  bool parse_string(std::string &out) {
+    ws();
+    if (i_ >= s_.size() || s_[i_] != '"') return false;
+    ++i_;
+    out.clear();
+    while (i_ < s_.size()) {
+      unsigned char c = (unsigned char)s_[i_++];
+      if (c == '"') return true;
+      if (c != '\\') { out.push_back((char)c); continue; }
+      if (i_ >= s_.size()) return false;
+      char e = s_[i_++];
+      switch (e) {
+        case '"': out.push_back('"'); break;
+        case '\\': out.push_back('\\'); break;
+        case '/': out.push_back('/'); break;
+        case 'b': out.push_back('\b'); break;
+        case 'f': out.push_back('\f'); break;
+        case 'n': out.push_back('\n'); break;
+        case 'r': out.push_back('\r'); break;
+        case 't': out.push_back('\t'); break;
+        case 'u': {
+          if (i_ + 4 > s_.size()) return false;
+          unsigned cp = 0;
+          for (int k = 0; k < 4; ++k) {
+            char h = s_[i_++];
+            cp <<= 4;
+            if (h >= '0' && h <= '9') cp |= (unsigned)(h - '0');
+            else if (h >= 'a' && h <= 'f') cp |= (unsigned)(h - 'a' + 10);
+            else if (h >= 'A' && h <= 'F') cp |= (unsigned)(h - 'A' + 10);
+            else return false;
+          }
+          if (cp >= 0xD800 && cp <= 0xDBFF && i_ + 6 <= s_.size() &&
+              s_[i_] == '\\' && s_[i_ + 1] == 'u') {
+            unsigned lo = 0;
+            size_t save = i_;
+            i_ += 2;
+            bool ok = true;
+            for (int k = 0; k < 4; ++k) {
+              char h = s_[i_++];
+              lo <<= 4;
+              if (h >= '0' && h <= '9') lo |= (unsigned)(h - '0');
+              else if (h >= 'a' && h <= 'f') lo |= (unsigned)(h - 'a' + 10);
+              else if (h >= 'A' && h <= 'F') lo |= (unsigned)(h - 'A' + 10);
+              else { ok = false; break; }
+            }
+            if (ok && lo >= 0xDC00 && lo <= 0xDFFF)
+              cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+            else
+              i_ = save;
+          }
+          if (cp <= 0x7F) out.push_back((char)cp);
+          else if (cp <= 0x7FF) {
+            out.push_back((char)(0xC0 | (cp >> 6)));
+            out.push_back((char)(0x80 | (cp & 0x3F)));
+          } else if (cp <= 0xFFFF) {
+            out.push_back((char)(0xE0 | (cp >> 12)));
+            out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back((char)(0x80 | (cp & 0x3F)));
+          } else {
+            out.push_back((char)(0xF0 | (cp >> 18)));
+            out.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+            out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back((char)(0x80 | (cp & 0x3F)));
+          }
+          break;
+        }
+        default: return false;
+      }
+    }
+    return false;
+  }
+  bool parse_raw(std::string &out) {
+    ws();
+    size_t start = i_;
+    if (i_ >= s_.size()) return false;
+    if (s_[i_] == '"') {
+      std::string tmp;
+      if (!parse_string(tmp)) return false;
+      out = s_.substr(start, i_ - start);
+      return true;
+    }
+    while (i_ < s_.size()) {
+      char c = s_[i_];
+      if (c == ',' || c == '}' || c == ']' || c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
+      ++i_;
+    }
+    if (i_ == start) return false;
+    out = s_.substr(start, i_ - start);
+    return true;
+  }
+  bool skip_value() {
+    ws();
+    if (i_ >= s_.size()) return false;
+    if (s_[i_] == '"') { std::string t; return parse_string(t); }
+    if (s_[i_] == '{' || s_[i_] == '[') {
+      char open = s_[i_++], close = open == '{' ? '}' : ']';
+      int depth = 1;
+      while (i_ < s_.size() && depth > 0) {
+        char c = s_[i_++];
+        if (c == '"') { --i_; std::string t; if (!parse_string(t)) return false; continue; }
+        if (c == open) ++depth;
+        else if (c == close) --depth;
+      }
+      return depth == 0;
+    }
+    std::string t;
+    return parse_raw(t);
+  }
+
+ private:
+  const std::string &s_;
+  size_t i_ = 0;
+};
+
+struct JRequest {
+  std::string id_raw;
+  std::string op;
+  std::string sql;
+  std::string search_mode;
+};
+
+static bool parse_request(const std::string &line, JRequest &req, std::string &err) {
+  JsonReader r(line);
+  r.ws();
+  if (!r.eat('{')) { err = "request must be a JSON object"; return false; }
+  bool first = true;
+  while (true) {
+    r.ws();
+    if (r.eat('}')) return true;
+    if (!first) {
+      if (!r.eat(',')) { err = "expected ','"; return false; }
+      r.ws();
+    }
+    first = false;
+    std::string key;
+    if (!r.parse_string(key)) { err = "expected key"; return false; }
+    if (!r.eat(':')) { err = "expected ':'"; return false; }
+    if (key == "id") {
+      if (!r.parse_raw(req.id_raw)) { err = "invalid id"; return false; }
+    } else if (key == "op") {
+      if (!r.parse_string(req.op)) { err = "invalid op"; return false; }
+    } else if (key == "sql") {
+      if (!r.parse_string(req.sql)) { err = "invalid sql"; return false; }
+    } else if (key == "search_mode") {
+      if (!r.parse_string(req.search_mode)) { err = "invalid search_mode"; return false; }
+    } else {
+      if (!r.skip_value()) { err = "invalid value"; return false; }
+    }
+  }
+}
+
+static std::string protocol_error_code(const SqlError &e) {
+  if (e.code == 1062) return "duplicate_key";
+  if (e.code == 1064) return "unsupported_sql";
+  if (e.code == 1366) {
+    std::string m = e.what();
+    if (m.find("dimension") != std::string::npos || m.find("Vector") != std::string::npos)
+      return "dimension_mismatch";
+    return "invalid_value";
+  }
+  if (e.code == 1406) return "value_too_long";
+  if (e.code == 1146) return "table_not_found";
+  if (e.code == 1054) return "column_not_found";
+  if (e.code == 1050) return "table_exists";
+  if (e.code == 1568) return "transaction_conflict";
+  return "sql_error";
+}
+
 // ---------------------------------------------------------------------------
 // AST and parser
 // ---------------------------------------------------------------------------
@@ -1229,35 +1531,33 @@ class DB {
     for (auto &kv : tables_) kv.second.vecs.release();
   }
 
-  // Execute one statement.  On success, out is the on-wire response text.
+  // Execute one statement.  Returns a structured result for JSON/legacy output.
   // Throws SqlError for parse/execution errors.
-  std::string exec_sql(const std::string &raw, bool recovering = false) {
+  Result exec_sql(const std::string &raw, bool recovering = false) {
     Parser p(raw);
     Stmt st = p.parse();
     bool rec = recovering || recovering_;
-    std::string out;
     switch (st.kind) {
       case Stmt::BEGIN: {
         if (in_tx_) throw SqlError(1568, "25001", "transaction already in progress");
         in_tx_ = true;
         undo_.clear();
         tx_sql_.clear();
-        out = ok(0);
-        break;
+        return Result{};
       }
       case Stmt::COMMIT: {
         if (in_tx_) commit_tx();
-        out = ok(0);
-        break;
+        return Result{};
       }
       case Stmt::ROLLBACK: {
         if (in_tx_) rollback_tx();
-        out = ok(0);
-        break;
+        return Result{};
       }
       case Stmt::DESCRIBE_TABLE: {
         Table &t = table(st.table);
-        out = "Field\tType\tNull\tKey\tDefault\tExtra\n";
+        Result r;
+        r.query = true;
+        r.columns = {"Field", "Type", "Null", "Key", "Default", "Extra"};
         for (size_t i = 0; i < t.cols.size(); ++i) {
           const Column &c = t.cols[i];
           std::string type;
@@ -1265,28 +1565,22 @@ class DB {
           else if (c.type == VT_VARCHAR) type = "varchar(" + std::to_string(c.len) + ")";
           else if (c.type == VT_VECTOR) type = "vector(" + std::to_string(c.len) + ")";
           else type = "unknown";
-          out += c.name;
-          out += "\t";
-          out += type;
-          out += "\t";
-          out += ((int)i == t.pk) ? "NO" : "YES";
-          out += "\t";
-          out += ((int)i == t.pk) ? "PRI" : "";
-          out += "\t";
-          out += "NULL";
-          out += "\t";
-          out.push_back('\n');
+          r.rows.push_back({vstr(c.name), vstr(type),
+                            vstr((int)i == t.pk ? "NO" : "YES"),
+                            vstr((int)i == t.pk ? "PRI" : ""),
+                            vstr("NULL"), vstr("")});
         }
-        break;
+        return r;
       }
       case Stmt::SHOW_TABLES: {
-        out = "Tables_in_test\n";
+        Result r;
+        r.query = true;
+        r.columns = {"Tables_in_test"};
         for (const auto &kv : tables_) {
           if (!st.like.empty() && !like_match(kv.first, st.like)) continue;
-          out += kv.first;
-          out.push_back('\n');
+          r.rows.push_back({vstr(kv.first)});
         }
-        break;
+        return r;
       }
       case Stmt::TRUNCATE: {
         if (in_tx_) commit_tx();
@@ -1294,56 +1588,53 @@ class DB {
         if (!rec) wal_commit_one(raw);
         t.rows.clear();
         t.pkmap.clear();
-        out = ok(0);
-        break;
+        return Result{};
       }
       case Stmt::OTHER:
-        out = ok(0);
-        break;
+        return Result{};
       case Stmt::CREATE_TABLE:
         if (in_tx_) commit_tx();
         create_table(st, raw, rec);
-        out = ok(0);
-        break;
+        return Result{};
       case Stmt::DROP_TABLE:
         if (in_tx_) commit_tx();
         drop_table(st, raw, rec);
-        out = ok(0);
-        break;
+        return Result{};
       case Stmt::CREATE_INDEX:
-        // Exact search is always available; the optional ANN index is a no-op.
         {
           auto &t = table(st.table);
           (void)t;
           col_index(t, st.index_col);
         }
-        out = ok(0);
-        break;
+        return Result{};
       case Stmt::DROP_INDEX:
-        // The exact engine has no physical index to drop; validate the table.
         (void)table(st.table);
-        out = ok(0);
-        break;
+        return Result{};
       case Stmt::INSERT: {
         int64_t n = insert_rows(st, raw, rec);
-        out = ok(n);
-        break;
+        Result r;
+        r.has_affected = true;
+        r.affected = n;
+        return r;
       }
       case Stmt::UPDATE: {
         int64_t n = update_rows(st, raw, rec);
-        out = ok(n);
-        break;
+        Result r;
+        r.has_affected = true;
+        r.affected = n;
+        return r;
       }
       case Stmt::DELETE_: {
         int64_t n = delete_rows(st, raw, rec);
-        out = ok(n);
-        break;
+        Result r;
+        r.has_affected = true;
+        r.affected = n;
+        return r;
       }
       case Stmt::SELECT:
-        out = select_rows(st);
-        break;
+        return select_rows(st);
     }
-    return out;
+    return Result{};
   }
 
   bool recovering_ = false;
@@ -1856,7 +2147,7 @@ class DB {
           for (auto &sql : buf) {
             try {
               recovering_ = true;
-              std::string ignored = exec_sql(sql, true);
+              Result ignored = exec_sql(sql, true);
               (void)ignored;
             } catch (const SqlError &e) {
               std::cerr << "WAL replay error [" << e.code << "]: " << e.what()
@@ -2112,10 +2403,10 @@ class DB {
   }
 
   // ---- SELECT --------------------------------------------------------------
-  std::string select_rows(const Stmt &st) {
+  Result select_rows(const Stmt &st) {
+    Result res;
+    res.query = true;
     if (st.table.empty()) {
-      // Constant SELECT without FROM (e.g. SELECT 1;), used by drivers as a
-      // readiness probe.
       std::vector<std::string> headers;
       std::vector<Value> vals;
       for (const auto &it : st.items) {
@@ -2126,19 +2417,10 @@ class DB {
         else if (it.expr->kind == Expr::LIT) headers.push_back(fmt_value(it.expr->lit));
         else headers.push_back("expr");
       }
-      std::string out;
-      for (size_t i = 0; i < headers.size(); ++i) {
-        if (i) out.push_back('\t');
-        out += headers[i];
-      }
-      out.push_back('\n');
-      if (st.limit == 0) return out;
-      for (size_t i = 0; i < vals.size(); ++i) {
-        if (i) out.push_back('\t');
-        out += fmt_value(vals[i]);
-      }
-      out.push_back('\n');
-      return out;
+      res.columns = headers;
+      if (st.limit == 0) return res;
+      res.rows.push_back(vals);
+      return res;
     }
     Table &t = table(st.table);
     std::vector<size_t> matches;
@@ -2247,28 +2529,25 @@ class DB {
       }
     }
 
-    std::string out;
-    for (size_t i = 0; i < headers.size(); ++i) {
-      if (i) out.push_back('\t');
-      out += headers[i];
-    }
-    out.push_back('\n');
+    res.columns = headers;
     int64_t emitted = 0;
     for (size_t k = 0; k < matches.size(); ++k) {
       if ((int64_t)k < off) continue;
       if (emitted >= lim) break;
       const Row &r = t.rows[matches[k]];
+      std::vector<Value> row;
+      row.reserve(headers.size());
       for (size_t i = 0; i < headers.size(); ++i) {
-        if (i) out.push_back('\t');
         Value v = exprs[i] ? eval(*exprs[i], t, r) : r.vals[(size_t)colidx[i]];
         if (v.type == VT_VECTOR && v.vdisk) v = t.vecs.materialize(v);
-        out += fmt_value(v);
+        row.push_back(v);
       }
-      out.push_back('\n');
+      res.rows.push_back(std::move(row));
       ++emitted;
     }
-    return out;
+    return res;
   }
+
 };
 
 // ---------------------------------------------------------------------------
@@ -2328,9 +2607,114 @@ static void split_statements(std::string &buf, std::vector<std::string> &out) {
 static volatile std::sig_atomic_t g_stop = 0;
 static void on_signal(int) { g_stop = 1; }
 
+static int legacy_main(DB &db) {
+  std::string buf, line;
+  bool done = false;
+  while (!g_stop && std::getline(std::cin, line)) {
+    std::string t = trim(line);
+    if (ieq(t, "exit") || ieq(t, "quit")) break;
+    if (starts_with_ci(t, "DELIMITER")) continue;
+    buf += line;
+    buf.push_back('\n');
+    std::vector<std::string> stmts;
+    split_statements(buf, stmts);
+    for (auto &s : stmts) {
+      if (g_stop) break;
+      std::string sql = trim(s);
+      if (sql.empty()) continue;
+      if (ieq(sql, "exit") || ieq(sql, "quit")) {
+        buf.clear();
+        done = true;
+        break;
+      }
+      try {
+        Result r = db.exec_sql(sql);
+        std::string out = format_legacy(r);
+        if (!out.empty()) {
+          std::cout << out;
+          if (out.back() != '\n') std::cout << '\n';
+          std::cout.flush();
+        }
+      } catch (const SqlError &e) {
+        std::cout << "ERROR " << e.code << " (" << e.state << "): " << e.what() << "\n";
+        std::cout.flush();
+      } catch (const std::exception &e) {
+        std::cout << "ERROR 1105 (HY000): " << e.what() << "\n";
+        std::cout.flush();
+      }
+    }
+    if (done) break;
+  }
+  if (!done && !g_stop) {
+    std::string sql = trim(buf);
+    if (!sql.empty()) {
+      try {
+        Result r = db.exec_sql(sql);
+        std::string out = format_legacy(r);
+        if (!out.empty()) std::cout << out << (out.back() == '\n' ? "" : "\n");
+        std::cout.flush();
+      } catch (const SqlError &e) {
+        std::cout << "ERROR " << e.code << " (" << e.state << "): " << e.what() << "\n";
+      } catch (const std::exception &e) {
+        std::cout << "ERROR 1105 (HY000): " << e.what() << "\n";
+      }
+    }
+  }
+  db.close();
+  return 0;
+}
+
+static int protocol_main(DB &db) {
+  std::cout << "{\"type\":\"ready\"}\n";
+  std::cout.flush();
+  std::string line;
+  while (!g_stop && std::getline(std::cin, line)) {
+    if (trim(line).empty()) continue;
+    JRequest req;
+    std::string perr;
+    if (!parse_request(line, req, perr)) {
+      std::cout << "{\"id\":null,\"ok\":false,\"error\":{\"code\":\"invalid_request\",\"message\":"
+                << json_escape(perr) << "}}\n";
+      std::cout.flush();
+      continue;
+    }
+    std::string id = req.id_raw.empty() ? "null" : req.id_raw;
+    if (req.op == "shutdown") {
+      db.close();
+      std::cout << "{\"id\":" << id << ",\"ok\":true}\n";
+      std::cout.flush();
+      return 0;
+    }
+    if (req.op != "execute") {
+      std::cout << "{\"id\":" << id
+                << ",\"ok\":false,\"error\":{\"code\":\"unsupported_op\",\"message\":\"unsupported operation\"}}\n";
+      std::cout.flush();
+      continue;
+    }
+    try {
+      Result r = db.exec_sql(req.sql);
+      std::cout << "{\"id\":" << id << ",\"ok\":true" << json_result_body(r) << "}\n";
+      std::cout.flush();
+    } catch (const SqlError &e) {
+      std::cout << "{\"id\":" << id << ",\"ok\":false,\"error\":{\"code\":"
+                << json_escape(protocol_error_code(e)) << ",\"message\":" << json_escape(e.what())
+                << "}}\n";
+      std::cout.flush();
+    } catch (const std::exception &e) {
+      std::cout << "{\"id\":" << id
+                << ",\"ok\":false,\"error\":{\"code\":\"internal_error\",\"message\":"
+                << json_escape(e.what()) << "}}\n";
+      std::cout.flush();
+    }
+  }
+  db.close();
+  return 0;
+}
+
 int main(int argc, char **argv) {
   std::string dir = "/data";
-  if (const char *e = std::getenv("DATA_DIR")) dir = e;
+  if (const char *e = std::getenv("VECTORDB_DATA_DIR")) dir = e;
+  else if (const char *e = std::getenv("DATA_DIR")) dir = e;
   if (argc > 1) dir = argv[1];
 
   DB db;
@@ -2347,54 +2731,8 @@ int main(int argc, char **argv) {
   sigaction(SIGTERM, &sa, nullptr);
   sigaction(SIGINT, &sa, nullptr);
 
-  std::string buf, line;
-  while (!g_stop && std::getline(std::cin, line)) {
-    std::string t = trim(line);
-    if (ieq(t, "exit") || ieq(t, "quit")) break;
-    if (starts_with_ci(t, "DELIMITER")) continue;
-    buf += line;
-    buf.push_back('\n');
-    std::vector<std::string> stmts;
-    split_statements(buf, stmts);
-    for (auto &s : stmts) {
-      if (g_stop) break;
-      std::string sql = trim(s);
-      if (sql.empty()) continue;
-      if (ieq(sql, "exit") || ieq(sql, "quit")) {
-        buf.clear();
-        goto done;
-      }
-      try {
-        std::string out = db.exec_sql(sql);
-        if (!out.empty()) {
-          std::cout << out;
-          if (out.back() != '\n') std::cout << '\n';
-          std::cout.flush();
-        }
-      } catch (const SqlError &e) {
-        std::cout << "ERROR " << e.code << " (" << e.state << "): " << e.what() << "\n";
-        std::cout.flush();
-      } catch (const std::exception &e) {
-        std::cout << "ERROR 1105 (HY000): " << e.what() << "\n";
-        std::cout.flush();
-      }
-    }
-  }
-  {
-    std::string sql = trim(buf);
-    if (!sql.empty()) {
-      try {
-        std::string out = db.exec_sql(sql);
-        if (!out.empty()) std::cout << out << (out.back() == '\n' ? "" : "\n");
-        std::cout.flush();
-      } catch (const SqlError &e) {
-        std::cout << "ERROR " << e.code << " (" << e.state << "): " << e.what() << "\n";
-      } catch (const std::exception &e) {
-        std::cout << "ERROR 1105 (HY000): " << e.what() << "\n";
-      }
-    }
-  }
-done:
-  db.close();
-  return 0;
+  const char *legacy = std::getenv("MVDB_LEGACY_STDIO");
+  if (legacy && *legacy && std::string(legacy) != "0")
+    return legacy_main(db);
+  return protocol_main(db);
 }

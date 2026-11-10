@@ -3,9 +3,15 @@
 A small, single-process vector database for the OceanBase 2026 database
 competition playoff question **MiniVectorDB** (`questionId=600081`).
 
-The database reads SQL from **stdin**, writes query results and execution
-status to **stdout**, writes diagnostics to **stderr**, and stores all durable
-state under **`/data`**. It does not open a network listener.
+The database speaks the official **JSONL stdin/stdout protocol** documented in
+[`STDIO_PROTOCOL.md`](STDIO_PROTOCOL.md): at startup it prints exactly
+`{"type":"ready"}`; it then reads one JSON request per line
+(`{"id":...,"op":"execute","sql":"...","search_mode":"exact"}`) and writes one
+JSON response per line (queries return `columns`/`rows`, DML returns
+`affected_rows`, errors return `ok:false` and a non-empty `error.code`).
+`{"id":...,"op":"shutdown"}` rolls back uncommitted work, persists, replies and
+exits 0. Diagnostics go to **stderr**; all durable state is under **`/data`**.
+It does not open a network listener.
 
 ## Build
 
@@ -25,36 +31,56 @@ mkdir -p data
 docker run -i --rm -v "$PWD/data:/data" minivectordb
 ```
 
-The evaluation driver connects to the container's stdin/stdout and uses
-`docker run -i` (no `-d`, no `-t`).
+The evaluation driver starts the container with `docker run -i` (no `-d`, no
+`-t`), waits for `{"type":"ready"}`, and then exchanges JSON lines.
+
+Run the official protocol checker against the built image:
+
+```bash
+python3 protocol_check/run.py --image minivectordb --handshake-only \
+  --output "protocol-results/handshake-$(date +%Y%m%d-%H%M%S)"
+python3 protocol_check/run.py --image minivectordb \
+  --output "protocol-results/public-$(date +%Y%m%d-%H%M%S)"
+```
 
 ## Run
 
 ```bash
 ./minivectordb /path/to/data
 # or
-DATA_DIR=/data ./minivectordb
+VECTORDB_DATA_DIR=/path/to/data ./minivectordb
 ```
 
 If no argument is given, the data directory defaults to `/data`. The directory
 is created if needed. All persistent files (`snapshot.bin`, `wal.bin`) live
 there.
 
-Example session (stdin):
+Example JSONL session:
 
-```sql
-CREATE TABLE docs (id BIGINT PRIMARY KEY, title VARCHAR(100), emb VECTOR(4));
-INSERT INTO docs VALUES (1, 'a', '[1,0,0,0]'), (2, 'b', '[0,1,0,0]');
-SELECT id, title FROM docs ORDER BY L2_DISTANCE(emb, '[1,0,0,0]') LIMIT 2;
-BEGIN;
-INSERT INTO docs VALUES (3, 'c', '[0,0,1,0]');
-ROLLBACK;
-SELECT id FROM docs ORDER BY id;
+```bash
+./minivectordb /tmp/mvdb-data <<'EOF'
+{"id":1,"op":"execute","sql":"CREATE TABLE docs (id BIGINT PRIMARY KEY, title VARCHAR(100), emb VECTOR(4));","search_mode":"exact"}
+{"id":2,"op":"execute","sql":"INSERT INTO docs VALUES (1, 'a', '[1,0,0,0]'), (2, 'b', '[0,1,0,0]');","search_mode":"exact"}
+{"id":3,"op":"execute","sql":"SELECT id, title FROM docs ORDER BY L2_DISTANCE(emb, '[1,0,0,0]') LIMIT 2;","search_mode":"exact"}
+{"id":4,"op":"shutdown"}
+EOF
 ```
 
-`SELECT` output is tab-separated: one header line followed by rows. DML/DDL
-statements return `Query OK, N rows affected`. Errors are returned as
-`ERROR <code> (<sqlstate>): <message>` on stdout; logs go to stderr.
+The response for the query is
+`{"id":3,"ok":true,"columns":["id","title"],"rows":[[1,"a"],[2,"b"]]}`.
+
+### Plain-SQL regression mode
+
+The original plain-SQL REPL is still available for the local legacy tests by
+setting `MVDB_LEGACY_STDIO=1`; it is **not** the submission protocol:
+
+```bash
+MVDB_LEGACY_STDIO=1 ./minivectordb /path/to/data
+```
+
+In that mode `SELECT` output is tab-separated and DML/DDL return
+`Query OK, N rows affected`; errors are `ERROR <code> (<sqlstate>): <message>`
+on stdout.
 
 ## SQL subset
 
@@ -126,12 +152,34 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
 
 ```bash
 make
-python3 tests/test_minivector.py
+CMD='["'"$PWD"'/minivectordb","{data_dir}"]'
+python3 protocol_check/run.py --command "$CMD" --handshake-only \
+  --output "protocol-results/handshake-$(date +%Y%m%d-%H%M%S)"
+python3 protocol_check/run.py --command "$CMD" \
+  --output "protocol-results/public-$(date +%Y%m%d-%H%M%S)"
 ```
 
-The dynamic suite covers creation, insert/select/update/delete, filtered
-vector TopK, tie-breaking, transactions and rollback, restart persistence,
-`SIGKILL` recovery, graceful-close rollback, error handling, `IF EXISTS`,
-`CREATE VECTOR INDEX`, and a 10k-row performance smoke test. The separate
-`tests/large_data_test.py` loads 100k x 128D, checks exact TopK, restarts and
-records peak RSS.
+The official checker runs the 20 public cases over the JSONL protocol,
+including `--restart`, `--mode ann`, error responses and transaction/shutdown
+rollback.
+
+The legacy plain-SQL regression suite is still run with
+`MVDB_LEGACY_STDIO=1`:
+
+```bash
+export MVDB_LEGACY_STDIO=1
+python3 tests/test_minivector.py
+python3 tests/protocol_test.py
+python3 tests/fuzz_smoke.py
+python3 tests/large_data_test.py
+```
+
+`./scripts/check.sh` runs the clean build, the legacy suite, ASan/UBSan, the
+official protocol handshake and all 20 public cases on the host; with
+`RUN_DOCKER=1` it repeats the handshake and public cases against the built
+image. The dynamic suite covers creation, insert/select/update/delete,
+filtered vector TopK, tie-breaking, transactions and rollback, restart
+persistence, `SIGKILL` recovery, graceful-close rollback, error handling,
+`IF EXISTS`, `CREATE VECTOR INDEX`, and a 10k-row performance smoke test. The
+separate `tests/large_data_test.py` loads 100k x 128D, checks exact TopK,
+restarts and records peak RSS.
