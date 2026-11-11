@@ -354,14 +354,6 @@
    "status": "observed"
   },
   {
-   "id": "e16",
-   "owner": "agent",
-   "hypothesis": "Agent Prompt 引用可被程序校验",
-   "command": "JSON pointer/quote validator",
-   "output": "all instances: pointers resolve, quotes exact substrings, no duplicates; JSON valid.",
-   "status": "observed"
-  },
-  {
    "id": "e18",
    "owner": "agent",
    "hypothesis": "AVX2/FMA 降低 exact L2 耗时",
