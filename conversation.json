@@ -232,16 +232,16 @@
    "student_takeaway": "准入通过只是起点，性能榜需要独立的索引/扫描优化路线。"
   },
   {
-   "id": "c18",
+   "id": "c19",
    "role": "student",
    "source": "recovered_student_direction",
-   "dimension_hint": "实验与反馈迭代",
-   "content": "优化后要验证综合指标，不只是本地耗时；用正式性能 E 对比 989.36→1611.28，确认 SIMD/过滤/堆的综合收益。",
-   "context": "性能优化后的正式指标验证。",
-   "agent_analysis": "本地 0.68→0.20s 只是 T 的一部分；正式 E 还含 I/O/内存，必须看整体。",
-   "attempt": "提交优化版，比较正式 E 与旧版。",
-   "result": "正式性能 E 989.356540 -> 1611.282154（+63%）；MySQL 正式用例仍通过。",
-   "student_takeaway": "优化要用正式综合指标验证，避免只看单一耗时。"
+   "dimension_hint": "技术理解与迁移",
+   "content": "K 的大小会改变选择算法的性价比；我提出比较 K=10/100/1000 的堆与 nth_element 路径，验证正确性和耗时，并分析阈值 64 的局限。",
+   "context": "把 TopK 优化迁移到不同 K 的新场景。",
+   "agent_analysis": "K<=64 走有界堆，K>64 走 nth_element；K 增大时候选选择和结果序列化都变重。",
+   "attempt": "在 10K×128D 上跑 K=10/100/1000，未过滤和过滤各 30 次，校验返回行数与唯一性。",
+   "result": "K=10: 0.235 ms/query unfiltered, 0.081 filtered; K=100: 0.276/0.093; K=1000: 0.410/0.213; 行数与唯一性均校验通过。",
+   "student_takeaway": "K<=64 用堆、K 大用 nth_element；阈值 64 是启发式，K=1000 时输出序列化占比上升，不同数据分布需重新测。"
   }
  ],
  "experiments": [
@@ -612,18 +612,18 @@
    "expected_tier": "1.0"
   },
   {
-   "id": "c18",
-   "dimension": "实验与反馈迭代",
-   "reason": "学生要求用正式综合指标验证优化，而不是只看本地耗时；正式 E 从 989.36 提升到 1611.28（+63%），MySQL 仍通过，形成完整验证闭环。",
+   "id": "c19",
+   "dimension": "技术理解与迁移",
+   "reason": "学生把 TopK 优化迁移到不同 K 的场景，实际跑 K=10/100/1000 并校验行数/唯一性，随后分析阈值 64 的启发式局限和 K 大时输出成本上升，构成“迁移+验证+局限”的 2.0 档实例。",
    "student_evidence": {
     "pointer": "/conversations/14/content",
-    "quote": "用正式性能 E 对比 989.36→1611.28"
+    "quote": "比较 K=10/100/1000 的堆与 nth_element 路径"
    },
    "result_evidence": {
     "pointer": "/conversations/14/result",
-    "quote": "正式性能 E 989.356540 -> 1611.282154（+63%）"
+    "quote": "K=10: 0.235 ms/query unfiltered, 0.081 filtered; K=100: 0.276/0.093; K=1000: 0.410/0.213"
    },
-   "expected_tier": "1.5"
+   "expected_tier": "2.0"
   }
  ]
 }
