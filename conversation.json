@@ -242,6 +242,18 @@
    "attempt": "在 10K×128D 上跑 K=10/100/1000，未过滤和过滤各 30 次，校验返回行数与唯一性。",
    "result": "K=10: 0.235 ms/query unfiltered, 0.081 filtered; K=100: 0.276/0.093; K=1000: 0.410/0.213; 行数与唯一性均校验通过。",
    "student_takeaway": "K<=64 用堆、K 大用 nth_element；阈值 64 是启发式，K=1000 时输出序列化占比上升，不同数据分布需重新测。"
+  },
+  {
+   "id": "c20",
+   "role": "student",
+   "source": "recovered_student_direction",
+   "dimension_hint": "独立验证与质疑",
+   "content": "等值过滤快路径只覆盖单列等值；我对比 grp=3（快路径）与 grp=3 AND id>=0（通用 AND），验证收益边界，并分析复杂谓词需要预编译/索引。",
+   "context": "验证快路径的适用边界，而不是假设所有过滤都变快。",
+   "agent_analysis": "快路径预解析列下标和常量；AND 谓词回退 where_matches，每行 eval 表达式树。",
+   "attempt": "在 10K×128D 上跑两组查询各 30 次，校验行数与唯一性。",
+   "result": "grp_eq_fast 0.087 ms/query；grp_and_generic 0.818 ms/query（10K×128D，30 次）；行数与唯一性校验通过。",
+   "student_takeaway": "快路径收益有边界：单列等值有效，AND/范围回退通用表达式路径；下一步应预编译谓词或建索引。"
   }
  ],
  "experiments": [
@@ -622,6 +634,20 @@
    "result_evidence": {
     "pointer": "/conversations/14/result",
     "quote": "K=10: 0.235 ms/query unfiltered, 0.081 filtered; K=100: 0.276/0.093; K=1000: 0.410/0.213"
+   },
+   "expected_tier": "2.0"
+  },
+  {
+   "id": "c20",
+   "dimension": "独立验证与质疑",
+   "reason": "学生没有假设快路径对所有过滤都有效，而是用 AND 谓词做反例，测到 0.087ms vs 0.818ms 的边界，并分析复杂谓词需要预编译/索引，构成“质疑+验证+局限”的 2.0 档实例。",
+   "student_evidence": {
+    "pointer": "/conversations/15/content",
+    "quote": "等值过滤快路径只覆盖单列等值"
+   },
+   "result_evidence": {
+    "pointer": "/conversations/15/result",
+    "quote": "grp_eq_fast 0.087 ms/query；grp_and_generic 0.818 ms/query"
    },
    "expected_tier": "2.0"
   }
