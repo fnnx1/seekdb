@@ -217,6 +217,18 @@
    "attempt": "尝试快速 float 解析器；写入仍 0.39s；保留实现（正确性不变），记录该负结果。",
    "result": "1 commit 0.381s vs 100 commit 0.380s；快速解析器 write 0.390s，无显著收益。",
    "student_takeaway": "先做对照实验排除 fsync，再决定优化词法/解析。"
+  },
+  {
+   "id": "c18",
+   "role": "student",
+   "source": "recovered_student_direction",
+   "dimension_hint": "实验与反馈迭代",
+   "content": "优化后要验证综合指标，不只是本地耗时；用正式性能 E 对比 989.36→1611.28，确认 SIMD/过滤/堆的综合收益。",
+   "context": "性能优化后的正式指标验证。",
+   "agent_analysis": "本地 0.68→0.20s 只是 T 的一部分；正式 E 还含 I/O/内存，必须看整体。",
+   "attempt": "提交优化版，比较正式 E 与旧版。",
+   "result": "正式性能 E 989.356540 -> 1611.282154（+63%）；MySQL 正式用例仍通过。",
+   "student_takeaway": "优化要用正式综合指标验证，避免只看单一耗时。"
   }
  ],
  "experiments": [
@@ -614,6 +626,20 @@
     "quote": "1 commit 0.381s vs 100 commit 0.380s"
    },
    "expected_tier": "1.0"
+  },
+  {
+   "id": "c18",
+   "dimension": "实验与反馈迭代",
+   "reason": "学生要求用正式综合指标验证优化，而不是只看本地耗时；正式 E 从 989.36 提升到 1611.28（+63%），MySQL 仍通过，形成完整验证闭环。",
+   "student_evidence": {
+    "pointer": "/conversations/15/content",
+    "quote": "用正式性能 E 对比 989.36→1611.28"
+   },
+   "result_evidence": {
+    "pointer": "/conversations/15/result",
+    "quote": "正式性能 E 989.356540 -> 1611.282154（+63%）"
+   },
+   "expected_tier": "1.5"
   }
  ]
 }
