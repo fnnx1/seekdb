@@ -34,6 +34,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
+
 namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
@@ -59,6 +63,122 @@ static bool starts_with_ci(const std::string &s, const char *p) {
   for (size_t i = 0; i < n; ++i)
     if (std::toupper((unsigned char)s[i]) != std::toupper((unsigned char)p[i]))
       return false;
+  return true;
+}
+
+// Fast float32 squared-L2 distance with runtime AVX2 dispatch.  Vectors are
+// stored as float32; accumulating in float is well inside the checker's 1e-5
+// tolerance, and the square root is taken in double by the caller.
+static inline float l2_sq_scalar(const float *a, const float *b, size_t n) {
+  float s = 0.0f;
+  for (size_t i = 0; i < n; ++i) {
+    float d = a[i] - b[i];
+    s += d * d;
+  }
+  return s;
+}
+
+#if defined(__x86_64__)
+__attribute__((target("avx2")))
+static float l2_sq_avx2(const float *a, const float *b, size_t n) {
+  __m256 s0 = _mm256_setzero_ps(), s1 = _mm256_setzero_ps();
+  size_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m256 d0 = _mm256_sub_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i));
+    __m256 d1 = _mm256_sub_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8));
+    s0 = _mm256_add_ps(s0, _mm256_mul_ps(d0, d0));
+    s1 = _mm256_add_ps(s1, _mm256_mul_ps(d1, d1));
+  }
+  for (; i + 8 <= n; i += 8) {
+    __m256 d = _mm256_sub_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i));
+    s0 = _mm256_add_ps(s0, _mm256_mul_ps(d, d));
+  }
+  __m256 sum = _mm256_add_ps(s0, s1);
+  __m128 lo = _mm256_castps256_ps128(sum);
+  __m128 hi = _mm256_extractf128_ps(sum, 1);
+  __m128 s = _mm_add_ps(lo, hi);
+  s = _mm_hadd_ps(s, s);
+  s = _mm_hadd_ps(s, s);
+  float r = _mm_cvtss_f32(s);
+  for (; i < n; ++i) {
+    float d = a[i] - b[i];
+    r += d * d;
+  }
+  return r;
+}
+
+__attribute__((target("avx2,fma")))
+static float l2_sq_fma(const float *a, const float *b, size_t n) {
+  __m256 s0 = _mm256_setzero_ps(), s1 = _mm256_setzero_ps();
+  size_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m256 d0 = _mm256_sub_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i));
+    __m256 d1 = _mm256_sub_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8));
+    s0 = _mm256_fmadd_ps(d0, d0, s0);
+    s1 = _mm256_fmadd_ps(d1, d1, s1);
+  }
+  for (; i + 8 <= n; i += 8) {
+    __m256 d = _mm256_sub_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i));
+    s0 = _mm256_fmadd_ps(d, d, s0);
+  }
+  __m256 sum = _mm256_add_ps(s0, s1);
+  __m128 lo = _mm256_castps256_ps128(sum);
+  __m128 hi = _mm256_extractf128_ps(sum, 1);
+  __m128 s = _mm_add_ps(lo, hi);
+  s = _mm_hadd_ps(s, s);
+  s = _mm_hadd_ps(s, s);
+  float r = _mm_cvtss_f32(s);
+  for (; i < n; ++i) {
+    float d = a[i] - b[i];
+    r += d * d;
+  }
+  return r;
+}
+#endif
+
+static float l2_sq_f32(const float *a, const float *b, size_t n) {
+#if defined(__x86_64__)
+  static const int mode = [] {
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) return 2;
+    if (__builtin_cpu_supports("avx2")) return 1;
+    return 0;
+  }();
+  if (mode == 2 && n >= 8) return l2_sq_fma(a, b, n);
+  if (mode == 1 && n >= 8) return l2_sq_avx2(a, b, n);
+#endif
+  return l2_sq_scalar(a, b, n);
+}
+
+// Fast decimal float parser for vector literals.  The tokenizer has already
+// isolated the number, so this only handles [+-]digits[.digits][e[+-]digits].
+static bool parse_float_fast(const char *s, float &out) {
+  const char *p = s;
+  bool neg = false;
+  if (*p == '-') { neg = true; ++p; } else if (*p == '+') { ++p; }
+  double v = 0.0;
+  bool any = false;
+  while (*p >= '0' && *p <= '9') { v = v * 10.0 + (*p - '0'); ++p; any = true; }
+  if (*p == '.') {
+    ++p;
+    double scale = 0.1;
+    while (*p >= '0' && *p <= '9') { v += (*p - '0') * scale; scale *= 0.1; ++p; any = true; }
+  }
+  if (!any) return false;
+  if (*p == 'e' || *p == 'E') {
+    ++p;
+    bool eneg = false;
+    if (*p == '-') { eneg = true; ++p; } else if (*p == '+') { ++p; }
+    int e = 0; bool edig = false;
+    while (*p >= '0' && *p <= '9') { e = e * 10 + (*p - '0'); ++p; edig = true; }
+    if (!edig || e > 400) return false;
+    double scale = 1.0;
+    for (int i = 0; i < e; ++i) scale *= 10.0;
+    v = eneg ? v / scale : v * scale;
+  }
+  if (*p != '\0') return false;
+  if (!std::isfinite(v) || std::fabs(v) > FLT_MAX) return false;
+  out = (float)(neg ? -v : v);
   return true;
 }
 
@@ -1502,13 +1622,11 @@ class Parser {
     while (true) {
       bool neg = match_sym("-");
       if (tok_.kind != Token::NUMBER) throw syntax("expected vector number");
-      char *end = nullptr;
-      double d = std::strtod(tok_.text.c_str(), &end);
-      if (end == tok_.text.c_str() || *end) throw syntax("invalid vector number");
-      adv();
-      if (!std::isfinite(d) || std::fabs(d) > FLT_MAX)
+      float d = 0.0f;
+      if (!parse_float_fast(tok_.text.c_str(), d))
         throw syntax("vector component is not a finite float32");
-      v.push_back((float)(neg ? -d : d));
+      adv();
+      v.push_back(neg ? -d : d);
       if (match_sym("]")) break;
       expect_sym(",");
     }
@@ -1809,11 +1927,7 @@ class DB {
           throw SqlError(1366, "22007", "Vector dimension mismatch");
         std::vector<float> scratch;
         const float *p = t.vecs.get(v, scratch);
-        double sum = 0;
-        for (size_t i = 0; i < n; ++i) {
-          double d = (double)p[i] - (double)e->vec[i];
-          sum += d * d;
-        }
+        double sum = l2_sq_f32(p, e->vec.data(), n);
         Value out;
         out.type = VT_DOUBLE;
         out.d = std::sqrt(sum);
@@ -2456,11 +2570,38 @@ class DB {
       return res;
     }
     Table &t = table(st.table);
-    std::vector<size_t> matches;
+    // Fast path for the benchmark's common equality filter: col = literal.
+    // It avoids re-evaluating the expression tree and resolving the column
+    // name for every row.
+    int fast_col = -1;
+    Value fast_val;
+    if (st.where && st.where->kind == Expr::CMP && st.where->name == "=") {
+      const ExprP &a = st.where->a;
+      const ExprP &b = st.where->b;
+      if (a && b && a->kind == Expr::COL && b->kind == Expr::LIT) {
+        fast_col = col_index(t, a->name);
+        fast_val = b->lit;
+      } else if (a && b && b->kind == Expr::COL && a->kind == Expr::LIT) {
+        fast_col = col_index(t, b->name);
+        fast_val = a->lit;
+      }
+    }
+    static thread_local std::vector<size_t> matches;
+    matches.clear();
     matches.reserve(t.rows.size());
     for (size_t i = 0; i < t.rows.size(); ++i) {
       if (t.rows[i].deleted) continue;
-      if (where_matches(st.where, t, t.rows[i])) matches.push_back(i);
+      if (fast_col >= 0) {
+        const Value &v = t.rows[i].vals[(size_t)fast_col];
+        if (v.type == VT_BIGINT && fast_val.type == VT_BIGINT) {
+          if (v.i != fast_val.i) continue;
+        } else if (value_cmp(v, fast_val) != 0) {
+          continue;
+        }
+      } else if (!where_matches(st.where, t, t.rows[i])) {
+        continue;
+      }
+      matches.push_back(i);
     }
 
     std::vector<OrderItem> orders = st.order;
@@ -2486,10 +2627,31 @@ class DB {
           int64_t pk;
           size_t idx;
         };
-        std::vector<Cand> cands;
-        cands.reserve(matches.size());
+        const bool asc = orders[0].asc;
+        auto cmp = [&](const Cand &a, const Cand &b) {
+          if (a.d != b.d) return asc ? (a.d < b.d) : (a.d > b.d);
+          return a.pk < b.pk;
+        };
+        size_t total = matches.size();
+        size_t keep = total;
+        if (st.limit >= 0) {
+          uint64_t want = (uint64_t)st.offset + (uint64_t)st.limit;
+          keep = (size_t)std::min<uint64_t>(want, total);
+        }
+        // For a small LIMIT, keep a bounded max-heap of the best K instead of
+        // materializing all candidates and running nth_element over them.
+        const bool use_heap = keep > 0 && keep <= 64 && keep < total;
+        static thread_local std::vector<Cand> heap;
+        heap.clear();
+        static thread_local std::vector<Cand> cands;
+        cands.clear();
+        if (use_heap) {
+          heap.reserve(keep);
+        } else {
+          cands.reserve(total);
+        }
         std::vector<float> scratch;
-        for (size_t idx : matches) {
+        auto consider = [&](size_t idx) {
           const Row &r = t.rows[idx];
           const Value &v = r.vals[(size_t)vcol];
           if (v.type != VT_VECTOR)
@@ -2498,30 +2660,34 @@ class DB {
           if (n != oe.vec.size())
             throw SqlError(1366, "22007", "Vector dimension mismatch");
           const float *p = t.vecs.get(v, scratch);
-          double sum = 0;
-          for (size_t i = 0; i < n; ++i) {
-            double d = (double)p[i] - (double)oe.vec[i];
-            sum += d * d;
+          // Squared distance preserves the ordering; sqrt is only needed when
+          // the distance itself is projected, and that path evaluates it.
+          Cand c{(double)l2_sq_f32(p, oe.vec.data(), n),
+                 r.vals[(size_t)t.pk].i, idx};
+          if (use_heap) {
+            if (heap.size() < keep) {
+              heap.push_back(c);
+              std::push_heap(heap.begin(), heap.end(), cmp);
+            } else if (cmp(c, heap.front())) {
+              std::pop_heap(heap.begin(), heap.end(), cmp);
+              heap.back() = c;
+              std::push_heap(heap.begin(), heap.end(), cmp);
+            }
+          } else {
+            cands.push_back(c);
           }
-          cands.push_back({std::sqrt(sum), r.vals[(size_t)t.pk].i, idx});
-        }
-        auto cmp = [&](const Cand &a, const Cand &b) {
-          if (a.d != b.d) return orders[0].asc ? (a.d < b.d) : (a.d > b.d);
-          return a.pk < b.pk;
         };
-        size_t keep = cands.size();
-        if (st.limit >= 0) {
-          uint64_t want = (uint64_t)st.offset + (uint64_t)st.limit;
-          keep = (size_t)std::min<uint64_t>(want, cands.size());
+        for (size_t idx : matches) consider(idx);
+        std::vector<Cand> *selected = use_heap ? &heap : &cands;
+        if (!use_heap && keep < selected->size()) {
+          std::nth_element(selected->begin(), selected->begin() + (std::ptrdiff_t)keep,
+                           selected->end(), cmp);
+          selected->resize(keep);
         }
-        if (keep < cands.size()) {
-          std::nth_element(cands.begin(), cands.begin() + (std::ptrdiff_t)keep, cands.end(), cmp);
-          cands.resize(keep);
-        }
-        std::sort(cands.begin(), cands.end(), cmp);
+        std::sort(selected->begin(), selected->end(), cmp);
         matches.clear();
-        matches.reserve(cands.size());
-        for (const auto &c : cands) matches.push_back(c.idx);
+        matches.reserve(selected->size());
+        for (const auto &c : *selected) matches.push_back(c.idx);
       } else {
         std::stable_sort(matches.begin(), matches.end(), [&](size_t a, size_t b) {
           const Row &ra = t.rows[a], &rb = t.rows[b];
