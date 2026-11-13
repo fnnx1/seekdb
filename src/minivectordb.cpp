@@ -353,12 +353,12 @@ class VectorStore {
     dim_ = dim;
     if (dim_ <= 0) throw SqlError(1105, "HY000", "invalid vector dimension");
     path_ = (fs::path(dir) / ("vec_" + hexname(table) + ".bin")).string();
-    fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600);
-    if (fd_ < 0)
-      throw SqlError(1105, "HY000", "cannot create vector store " + path_);
+    fd_ = -1;
     end_ = 0;
     mapped_ = 0;
     chunks_.clear();
+    mem_.clear();
+    in_mem_ = true;
   }
 
   // Copy an owned vector into the file and return a stored reference.
@@ -373,6 +373,32 @@ class VectorStore {
     if ((int)v.v.size() != dim_)
       throw SqlError(1366, "22007", "Vector dimension mismatch");
     size_t bytes = (size_t)dim_ * sizeof(float);
+    if (in_mem_) {
+      if (end_ + bytes <= kMemLimit) {
+        size_t old = mem_.size();
+        mem_.resize(old + (size_t)dim_);
+        std::memcpy(mem_.data() + old, v.v.data(), bytes);
+        uint64_t moff = end_;
+        end_ += bytes;
+        Value out;
+        out.type = VT_VECTOR;
+        out.vdisk = true;
+        out.voff = moff;
+        out.vlen = (uint32_t)dim_;
+        return out;
+      }
+      fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600);
+      if (fd_ < 0)
+        throw SqlError(1105, "HY000", "cannot create vector store " + path_);
+      if (!mem_.empty()) {
+        size_t nb = mem_.size() * sizeof(float);
+        ssize_t w = ::pwrite(fd_, mem_.data(), nb, 0);
+        if (w != (ssize_t)nb)
+          throw SqlError(1105, "HY000", "vector store write failed");
+      }
+      in_mem_ = false;
+      mem_.clear();
+    }
     uint64_t off = end_;
     if (off + bytes <= kMmapLimit) {
       size_t ci = (size_t)(off / chunk_);
@@ -410,7 +436,10 @@ class VectorStore {
         throw SqlError(1366, "22007", "Vector dimension mismatch");
       return v.v.data();
     }
-    if (v.voff + bytes <= mapped_ && !chunks_.empty()) {
+    if (in_mem_) {
+      if (v.voff + bytes <= end_)
+        return mem_.data() + v.voff / sizeof(float);
+    } else if (v.voff + bytes <= mapped_ && !chunks_.empty()) {
       size_t ci = (size_t)(v.voff / chunk_);
       size_t within = (size_t)(v.voff % chunk_);
       if (ci < chunks_.size())
@@ -448,7 +477,16 @@ class VectorStore {
     end_ = 0;
     mapped_ = 0;
     dim_ = 0;
+    mem_.clear();
+    in_mem_ = true;
   }
+
+  // Contiguous base for the in-memory fast path (null when file-backed).
+  const float *raw_base() const {
+    if (in_mem_) return mem_.empty() ? nullptr : mem_.data();
+    return chunks_.empty() ? nullptr : (const float *)chunks_[0];
+  }
+  uint64_t mapped_bytes() const { return in_mem_ ? end_ : mapped_; }
 
  private:
   static constexpr uint64_t kMmapLimit = 64ull * 1024 * 1024;
@@ -458,6 +496,9 @@ class VectorStore {
   uint64_t end_ = 0;
   uint64_t mapped_ = 0;
   std::vector<void *> chunks_;
+  std::vector<float> mem_;
+  bool in_mem_ = true;
+  static constexpr uint64_t kMemLimit = 128ull * 1024 * 1024;
   std::string path_;
 
   static std::string hexname(const std::string &s) {
@@ -478,12 +519,16 @@ class VectorStore {
     mapped_ = o.mapped_;
     chunk_ = o.chunk_;
     chunks_ = std::move(o.chunks_);
+    mem_ = std::move(o.mem_);
+    in_mem_ = o.in_mem_;
     path_ = std::move(o.path_);
     o.fd_ = -1;
     o.dim_ = 0;
     o.end_ = 0;
     o.mapped_ = 0;
     o.chunks_.clear();
+    o.mem_.clear();
+    o.in_mem_ = true;
     o.path_.clear();
   }
 };
@@ -1763,9 +1808,12 @@ class DB {
       wal_ = nullptr;
     }
     std::string err;
-    // Keep the WAL if the snapshot could not be written; it is the only
-    // durable copy of commits newer than the last snapshot.
-    if (save_snapshot(err)) truncate_wal_file();
+    // A small WAL already holds every commit; writing a full shutdown snapshot
+    // only duplicates data and disk I/O.  Large WALs are still compacted so a
+    // restart does not replay an unbounded log.
+    if (wal_bytes_ > (64ull << 20)) {
+      if (save_snapshot(err)) truncate_wal_file();
+    }
     for (auto &kv : tables_) kv.second.vecs.release();
   }
 
@@ -1886,6 +1934,7 @@ class DB {
   std::vector<std::string> tx_sql_;
   uint64_t seq_ = 0;
   uint64_t last_seq_ = 0;
+  uint64_t wal_bytes_ = 0;
   FILE *wal_ = nullptr;
 
   static std::string ok(int64_t n) {
@@ -2114,6 +2163,7 @@ class DB {
     std::string p = (fs::path(dir_) / "wal.bin").string();
     FILE *f = std::fopen(p.c_str(), "wb");
     if (f) std::fclose(f);
+    wal_bytes_ = 0;
   }
 
   bool wal_sync() {
@@ -2135,6 +2185,7 @@ class DB {
     if (!put_u32(wal_, len) || !put_u64(wal_, sq) || !put_u32(wal_, crc) ||
         !put_u8(wal_, type) || !put_bytes(wal_, payload.data(), payload.size()))
       return false;
+    wal_bytes_ += 4 + 8 + 4 + 1 + payload.size();
     return true;
   }
 
