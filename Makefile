@@ -1,5 +1,5 @@
 CXX ?= g++
-CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra -Wno-unused-parameter
+CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra -Wno-unused-parameter -fopenmp
 TARGET = minivectordb
 SRC = src/minivectordb.cpp
 

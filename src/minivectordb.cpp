@@ -38,6 +38,10 @@
 #include <immintrin.h>
 #endif
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
@@ -182,6 +186,28 @@ static bool parse_float_fast(const char *s, float &out) {
   return true;
 }
 
+static bool parse_float_range(const char *p, const char *e, float &out) {
+  bool neg = false;
+  if (p < e && *p == '-') { neg = true; ++p; } else if (p < e && *p == '+') { ++p; }
+  double v = 0.0; bool any = false;
+  while (p < e && *p >= '0' && *p <= '9') { v = v * 10.0 + (*p - '0'); ++p; any = true; }
+  if (p < e && *p == '.') { ++p; double scale = 0.1; while (p < e && *p >= '0' && *p <= '9') { v += (*p - '0') * scale; scale *= 0.1; ++p; any = true; } }
+  if (!any) return false;
+  if (p < e && (*p == 'e' || *p == 'E')) {
+    ++p; bool eneg = false;
+    if (p < e && *p == '-') { eneg = true; ++p; } else if (p < e && *p == '+') { ++p; }
+    int ex = 0; bool edig = false;
+    while (p < e && *p >= '0' && *p <= '9') { ex = ex * 10 + (*p - '0'); ++p; edig = true; }
+    if (!edig || ex > 400) return false;
+    double scale = 1.0; for (int k = 0; k < ex; ++k) scale *= 10.0;
+    v = eneg ? v / scale : v * scale;
+  }
+  if (p != e) return false;
+  if (!std::isfinite(v) || std::fabs(v) > FLT_MAX) return false;
+  out = (float)(neg ? -v : v);
+  return true;
+}
+
 static bool like_match(const std::string &s, const std::string &p) {
   size_t si = 0, pi = 0;
   size_t star = std::string::npos, match = 0;
@@ -214,18 +240,33 @@ static SqlError syntax(const std::string &m) { return SqlError(1064, "42000", m)
 
 // CRC32 (IEEE) over arbitrary byte ranges.
 static uint32_t crc32_update(uint32_t crc, const void *data, size_t n) {
-  static uint32_t table[256];
+  static uint32_t table[8][256];
   static bool init = false;
   if (!init) {
     for (uint32_t i = 0; i < 256; ++i) {
       uint32_t c = i;
       for (int k = 0; k < 8; ++k) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
-      table[i] = c;
+      table[0][i] = c;
     }
+    for (int j = 1; j < 8; ++j)
+      for (int i = 0; i < 256; ++i)
+        table[j][i] = (table[j - 1][i] >> 8) ^ table[0][table[j - 1][i] & 0xFF];
     init = true;
   }
   const uint8_t *p = (const uint8_t *)data;
-  for (size_t i = 0; i < n; ++i) crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+  while (n >= 8) {
+    uint32_t lo = crc ^ ((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+                         ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
+    uint32_t hi = (uint32_t)p[4] | ((uint32_t)p[5] << 8) |
+                  ((uint32_t)p[6] << 16) | ((uint32_t)p[7] << 24);
+    crc = table[7][lo & 0xFF] ^ table[6][(lo >> 8) & 0xFF] ^
+          table[5][(lo >> 16) & 0xFF] ^ table[4][(lo >> 24) & 0xFF] ^
+          table[3][hi & 0xFF] ^ table[2][(hi >> 8) & 0xFF] ^
+          table[1][(hi >> 16) & 0xFF] ^ table[0][(hi >> 24) & 0xFF];
+    p += 8;
+    n -= 8;
+  }
+  while (n--) crc = table[0][(crc ^ *p++) & 0xFF] ^ (crc >> 8);
   return crc;
 }
 
@@ -653,6 +694,36 @@ class Lexer {
     return {Token::SYMBOL, std::string(1, c)};
   }
 
+  bool take_vector(std::vector<float> &out) {
+    bool need_number = false;
+    for (;;) {
+      skip();
+      if (i_ >= s_.size()) return false;
+      if (s_[i_] == ']') { if (need_number) return false; ++i_; return true; }
+      bool neg = false;
+      if (s_[i_] == '-') { neg = true; ++i_; skip(); }
+      else if (s_[i_] == '+') { ++i_; skip(); }
+      size_t b = i_;
+      bool dot = false, exp = false;
+      while (i_ < s_.size()) {
+        char x = s_[i_];
+        if (std::isdigit((unsigned char)x)) ++i_;
+        else if (x == '.' && !dot && !exp) { dot = true; ++i_; }
+        else if ((x == 'e' || x == 'E') && !exp) { exp = true; ++i_; if (i_ < s_.size() && (s_[i_] == '+' || s_[i_] == '-')) ++i_; }
+        else break;
+      }
+      if (b == i_) return false;
+      float d = 0.0f;
+      if (!parse_float_range(s_.data() + b, s_.data() + i_, d)) return false;
+      out.push_back(neg ? -d : d);
+      skip();
+      if (i_ >= s_.size()) return false;
+      if (s_[i_] == ',') { ++i_; need_number = true; continue; }
+      if (s_[i_] == ']') { ++i_; return true; }
+      return false;
+    }
+  }
+
  private:
   void skip() {
     for (;;) {
@@ -818,6 +889,19 @@ class JsonReader {
     ws();
     if (i_ >= s_.size() || s_[i_] != '"') return false;
     ++i_;
+    // Fast path: most protocol strings (notably the SQL text) contain no
+    // JSON escapes.  Copy the raw span once instead of appending per byte.
+    {
+      size_t b = i_;
+      size_t q = s_.find('"', b);
+      size_t bs = s_.find('\\', b);
+      if (q != std::string::npos && (bs == std::string::npos || q < bs)) {
+        out.assign(s_, b, q - b);
+        i_ = q + 1;
+        return true;
+      }
+      i_ = b;
+    }
     out.clear();
     while (i_ < s_.size()) {
       unsigned char c = (unsigned char)s_[i_++];
@@ -1514,8 +1598,9 @@ class Parser {
         std::string er;
         if (!parse_vector_string(tok_.text, q, er)) throw syntax(er);
         adv();
-      } else if (match_sym("[")) {
-        q = parse_number_vector();
+      } else if (is_sym("[")) {
+        if (!lex_.take_vector(q)) throw syntax("invalid vector literal");
+        adv();
       } else {
         throw syntax("expected vector literal");
       }
@@ -1561,11 +1646,13 @@ class Parser {
       return e;
     }
     if (is_sym("[")) {
+      std::vector<float> vec;
+      if (!lex_.take_vector(vec)) throw syntax("invalid vector literal");
       adv();
       auto e = std::make_shared<Expr>();
       e->kind = Expr::LIT;
       e->lit.type = VT_VECTOR;
-      e->lit.v = parse_number_vector();
+      e->lit.v = std::move(vec);
       return e;
     }
     if (match_sym("(")) {
@@ -2032,7 +2119,7 @@ class DB {
   bool wal_sync() {
     if (!wal_) return false;
     if (std::fflush(wal_) != 0) return false;
-    return ::fsync(::fileno(wal_)) == 0;
+    return ::fdatasync(::fileno(wal_)) == 0;
   }
 
   bool wal_record(uint8_t type, const std::string &payload) {
@@ -2586,24 +2673,6 @@ class DB {
         fast_val = a->lit;
       }
     }
-    static thread_local std::vector<size_t> matches;
-    matches.clear();
-    matches.reserve(t.rows.size());
-    for (size_t i = 0; i < t.rows.size(); ++i) {
-      if (t.rows[i].deleted) continue;
-      if (fast_col >= 0) {
-        const Value &v = t.rows[i].vals[(size_t)fast_col];
-        if (v.type == VT_BIGINT && fast_val.type == VT_BIGINT) {
-          if (v.i != fast_val.i) continue;
-        } else if (value_cmp(v, fast_val) != 0) {
-          continue;
-        }
-      } else if (!where_matches(st.where, t, t.rows[i])) {
-        continue;
-      }
-      matches.push_back(i);
-    }
-
     std::vector<OrderItem> orders = st.order;
     for (auto &oi : orders) {
       if (oi.expr && oi.expr->kind == Expr::COL) {
@@ -2615,9 +2684,30 @@ class DB {
         }
       }
     }
+    const bool no_filter = !st.where;
+    const bool l2_hot = orders.size() == 1 && orders[0].expr &&
+                        orders[0].expr->kind == Expr::L2;
+    static thread_local std::vector<size_t> matches;
+    matches.clear();
+    if (!l2_hot || !no_filter) {
+      matches.reserve(t.rows.size());
+      for (size_t i = 0; i < t.rows.size(); ++i) {
+        if (t.rows[i].deleted) continue;
+        if (fast_col >= 0) {
+          const Value &v = t.rows[i].vals[(size_t)fast_col];
+          if (v.type == VT_BIGINT && fast_val.type == VT_BIGINT) {
+            if (v.i != fast_val.i) continue;
+          } else if (value_cmp(v, fast_val) != 0) {
+            continue;
+          }
+        } else if (!where_matches(st.where, t, t.rows[i])) {
+          continue;
+        }
+        matches.push_back(i);
+      }
+    }
     if (!orders.empty()) {
-      if (orders.size() == 1 && orders[0].expr &&
-          orders[0].expr->kind == Expr::L2) {
+      if (l2_hot) {
         // Hot path: exact L2 TopK.  Compute each distance once, then use a
         // bounded selection for LIMIT instead of sorting with vector copies.
         const Expr &oe = *orders[0].expr;
@@ -2632,7 +2722,7 @@ class DB {
           if (a.d != b.d) return asc ? (a.d < b.d) : (a.d > b.d);
           return a.pk < b.pk;
         };
-        size_t total = matches.size();
+        size_t total = no_filter ? t.rows.size() : matches.size();
         size_t keep = total;
         if (st.limit >= 0) {
           uint64_t want = (uint64_t)st.offset + (uint64_t)st.limit;
@@ -2650,6 +2740,48 @@ class DB {
         } else {
           cands.reserve(total);
         }
+#ifdef _OPENMP
+        if (no_filter && use_heap && t.rows.size() >= 2000) {
+          const int NT = 2;
+          std::vector<Cand> locals[NT];
+          const long long nrows = (long long)t.rows.size();
+          #pragma omp parallel num_threads(NT)
+          {
+            const int tid = omp_get_thread_num();
+            std::vector<float> lscratch;
+            std::vector<Cand> &lh = locals[tid];
+            lh.reserve(keep);
+            #pragma omp for schedule(static)
+            for (long long ii = 0; ii < nrows; ++ii) {
+              const size_t idx = (size_t)ii;
+              if (t.rows[idx].deleted) continue;
+              const Row &r = t.rows[idx];
+              const Value &v = r.vals[(size_t)vcol];
+              const float *p = t.vecs.get(v, lscratch);
+              Cand c{(double)l2_sq_f32(p, oe.vec.data(), (size_t)v.vlen),
+                     r.vals[(size_t)t.pk].i, idx};
+              if (lh.size() < keep) {
+                lh.push_back(c);
+                std::push_heap(lh.begin(), lh.end(), cmp);
+              } else if (cmp(c, lh.front())) {
+                std::pop_heap(lh.begin(), lh.end(), cmp);
+                lh.back() = c;
+                std::push_heap(lh.begin(), lh.end(), cmp);
+              }
+            }
+          }
+          std::vector<Cand> merged;
+          merged.reserve(locals[0].size() + locals[1].size());
+          merged.insert(merged.end(), locals[0].begin(), locals[0].end());
+          merged.insert(merged.end(), locals[1].begin(), locals[1].end());
+          std::sort(merged.begin(), merged.end(), cmp);
+          if (merged.size() > keep) merged.resize(keep);
+          matches.clear();
+          matches.reserve(merged.size());
+          for (const auto &c : merged) matches.push_back(c.idx);
+        } else
+#endif
+        {
         std::vector<float> scratch;
         auto consider = [&](size_t idx) {
           const Row &r = t.rows[idx];
@@ -2677,7 +2809,14 @@ class DB {
             cands.push_back(c);
           }
         };
-        for (size_t idx : matches) consider(idx);
+        if (no_filter) {
+          for (size_t idx = 0; idx < t.rows.size(); ++idx) {
+            if (t.rows[idx].deleted) continue;
+            consider(idx);
+          }
+        } else {
+          for (size_t idx : matches) consider(idx);
+        }
         std::vector<Cand> *selected = use_heap ? &heap : &cands;
         if (!use_heap && keep < selected->size()) {
           std::nth_element(selected->begin(), selected->begin() + (std::ptrdiff_t)keep,
@@ -2688,6 +2827,7 @@ class DB {
         matches.clear();
         matches.reserve(selected->size());
         for (const auto &c : *selected) matches.push_back(c.idx);
+        }
       } else {
         std::stable_sort(matches.begin(), matches.end(), [&](size_t a, size_t b) {
           const Row &ra = t.rows[a], &rb = t.rows[b];
