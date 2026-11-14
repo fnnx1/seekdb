@@ -104,39 +104,43 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
 
 ## Design
 
-- **Storage layout:** row metadata (primary key, strings and vector
-  references) is kept in memory; vector payloads live in a per-table
-  file-backed store. The first 64 MiB of a vector store is `mmap`-ed for fast
-  scans; larger stores switch to `pread`/`pwrite`, so the vector payload does
-  not inflate anonymous RSS. A binary snapshot (`/data/snapshot.bin`) stores
-  schemas and live rows, and a write-ahead log (`/data/wal.bin`) records
-  committed SQL statements with length, sequence number and CRC32. The vector
-  file is a derived cache: the snapshot/WAL are the source of truth and the
-  cache is rebuilt on startup.
-- **Vector search:** exact L2 scan over the filtered row set. TopK is produced
-  by sorting on distance and then primary key. `CREATE VECTOR INDEX` is
-  accepted as a no-op because exact search is available; this guarantees
-  Recall@10 = 1.0.
+- **Storage layout:** row cells use 16-byte tagged values for integers,
+  strings and vector references. Vector stores up to 128 MiB stay contiguous
+  in memory; larger stores spill to a derived file and release their memory
+  buffer. A binary snapshot (`/data/snapshot.bin`) stores schemas and live
+  rows. The CRC-protected WAL (`/data/wal.bin`) stores typed binary INSERT
+  batches and SQL for other mutations. Snapshot/WAL are the source of truth;
+  derived vector files and query caches are rebuilt after recovery.
+- **Vector search:** exact L2 TopK with a bounded heap, AVX2/FMA dispatch,
+  two scan threads for larger unfiltered scans, and an equality-filter index.
+  A derived cache, capped at 32 MiB per table, holds compact scan metadata
+  and six-bit quantized coordinates. The triangle inequality and conservative
+  rounding margins reject only candidates whose distance lower bound exceeds
+  the current TopK radius. Surviving candidates use the original float32
+  distance kernel, with primary key ascending for ties. Out-of-range queries,
+  large tables and unsupported query shapes retain the exhaustive scan.
+  `CREATE VECTOR INDEX` is accepted; searches always preserve exact results.
 - **Transactions:** at most one explicit transaction. Changes are applied
   immediately and an undo log restores the previous state on `ROLLBACK`.
   Statements are validated before any change, so a failed multi-row statement
   leaves no partial effect. `COMMIT` appends all statements of the transaction
-  to the WAL and `fsync`s before reporting success.
+  to the WAL and `fdatasync`s before reporting success. Durable full WAL pages
+  are evicted from the page cache, retaining the partial append page.
 - **Recovery:** on startup the snapshot is loaded and complete WAL
   transaction groups with sequence greater than the snapshot's sequence are
   replayed. A trailing incomplete record is ignored. Auto-commit statements are
-  logged before being applied. Normal close rolls back an open transaction,
-  writes a snapshot and truncates the WAL. `SIGTERM`/`SIGINT` trigger the same
-  graceful close; `SIGKILL` is recovered from the WAL.
-- **Resource use:** the process uses only the C++ standard library, does not
-  spawn worker processes or threads, and does not listen on any port. On this
-  machine, 1,000,000 rows x 128 dimensions peaks at about 370 MiB RSS
-  (insert and restart) instead of keeping 512 MiB of vector payloads on the
-  heap; the snapshot is about 526 MiB on disk.
+  logged before being applied. Normal close rolls back an open transaction
+  and keeps a WAL up to 64 MiB, avoiding a duplicate shutdown snapshot; larger
+  WALs are compacted. Startup replays committed groups and checkpoints them.
+  `SIGTERM`/`SIGINT` trigger graceful close; `SIGKILL` is recovered from the WAL.
+- **Protocol and resource use:** buffered input handles interrupted reads so
+  signals can stop an idle process. Decimal vector parsing uses `from_chars`
+  with compatibility fallbacks. The process uses the C++ standard library,
+  Linux file I/O and OpenMP, starts no worker processes, and has no listener.
 
 ## Limitations
 
-- Row metadata and the snapshot as a whole are still in memory/page cache;
+- Row metadata and snapshot writes still consume memory/page cache;
   the vector payload is off-heap. A dataset whose *row metadata* exceeds the
   memory limit would still need a fully paged row store.
 - The vector file is append-only between snapshots; repeated updates can grow
@@ -172,6 +176,7 @@ python3 tests/test_minivector.py
 python3 tests/protocol_test.py
 python3 tests/fuzz_smoke.py
 python3 tests/large_data_test.py
+python3 tests/exact_pruning_test.py
 ```
 
 `./scripts/check.sh` runs the clean build, the legacy suite, ASan/UBSan, the
@@ -183,3 +188,13 @@ persistence, `SIGKILL` recovery, graceful-close rollback, error handling,
 `IF EXISTS`, `CREATE VECTOR INDEX`, and a 10k-row performance smoke test. The
 separate `tests/large_data_test.py` loads 100k x 128D, checks exact TopK,
 restarts and records peak RSS.
+
+`tests/performance_bench.py` prepares requests before timing, runs sequential
+durable transactions and exact searches against an independent integer
+oracle, and verifies recovery after killing the process. It defaults to data
+directories on the repository's filesystem, because `/tmp` may be tmpfs.
+
+```bash
+python3 tests/performance_bench.py --binary /path/to/baseline \
+  --binary ./minivectordb --rounds 7 --cpus 0,1 --json /tmp/performance.json
+```

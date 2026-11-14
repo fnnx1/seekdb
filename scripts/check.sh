@@ -16,6 +16,9 @@ make
 echo "== legacy dynamic tests =="
 python3 tests/test_minivector.py
 
+echo "== exact pruning regression =="
+python3 tests/exact_pruning_test.py
+
 echo "== legacy protocol tests =="
 python3 tests/protocol_test.py
 
@@ -32,6 +35,13 @@ g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -o "$SAN_BIN" src/minivectordb.cpp
 MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/test_minivector.py
+MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/exact_pruning_test.py
+
+echo "== ASan/UBSan compact cell ownership and snapshot tests =="
+g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -o "$SAN_BIN" tests/stored_value_test.cpp
+ASAN_OPTIONS=detect_leaks=1 "$SAN_BIN"
 
 echo "== optional clang-tidy =="
 if [[ "${RUN_TIDY:-0}" == "1" ]]; then

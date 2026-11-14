@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <charconv>
 #include <csignal>
 #include <cfloat>
 #include <cmath>
@@ -152,6 +153,45 @@ static float l2_sq_f32(const float *a, const float *b, size_t n) {
   if (mode == 1 && n >= 8) return l2_sq_avx2(a, b, n);
 #endif
   return l2_sq_scalar(a, b, n);
+}
+
+// Six-bit signed quantization is only a rejection filter.  The triangle
+// inequality gives a conservative L2 lower bound; every surviving candidate
+// is ranked with the original float32 distance kernel.  Restricting codes to
+// [-63,63] also keeps AVX2's pairwise maddubs sum below its saturation limit.
+#if defined(__x86_64__)
+__attribute__((target("avx2")))
+static int quant_dot_avx2(const int8_t *a, const uint8_t *b, size_t n) {
+  __m256i sum = _mm256_setzero_si256();
+  const __m256i one = _mm256_set1_epi16(1);
+  size_t j = 0;
+  for (; j + 32 <= n; j += 32) {
+    __m256i pairs = _mm256_maddubs_epi16(
+        _mm256_loadu_si256((const __m256i *)(b + j)),
+        _mm256_loadu_si256((const __m256i *)(a + j)));
+    sum = _mm256_add_epi32(sum, _mm256_madd_epi16(pairs, one));
+  }
+  __m128i s = _mm_add_epi32(_mm256_castsi256_si128(sum),
+                          _mm256_extracti128_si256(sum, 1));
+  s = _mm_hadd_epi32(s, s);
+  s = _mm_hadd_epi32(s, s);
+  int out = _mm_cvtsi128_si32(s);
+  for (; j < n; ++j) out += (int)a[j] * (int)b[j];
+  return out;
+}
+#endif
+
+static int quant_dot(const int8_t *a, const uint8_t *b, size_t n) {
+#if defined(__x86_64__)
+  static const bool avx2 = [] {
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx2") != 0;
+  }();
+  if (avx2) return quant_dot_avx2(a, b, n);
+#endif
+  int out = 0;
+  for (size_t j = 0; j < n; ++j) out += (int)a[j] * (int)b[j];
+  return out;
 }
 
 // Fast decimal float parser for vector literals.  The tokenizer has already
@@ -399,7 +439,7 @@ class VectorStore {
           throw SqlError(1105, "HY000", "vector store write failed");
       }
       in_mem_ = false;
-      mem_.clear();
+      std::vector<float>().swap(mem_);
     }
     uint64_t off = end_;
     if (off + bytes <= kMmapLimit) {
@@ -535,8 +575,87 @@ class VectorStore {
   }
 };
 
+// Persisted cells only need a scalar, a vector offset, or an owned string.
+// Keep SQL/query Values separate so every integer and vector reference does
+// not carry two empty C++ containers in every stored row.
+struct StoredValue {
+  uint8_t type = VT_BIGINT;
+  bool vdisk = false;
+  uint32_t vlen = 0;
+  union {
+    int64_t i = 0;
+    double d;
+    uint64_t voff;
+    std::string *str;
+    std::vector<float> *vec;
+  };
+
+  StoredValue() = default;
+  explicit StoredValue(Value v) : type((uint8_t)v.type), vdisk(v.vdisk), vlen(v.vlen) {
+    if (type == VT_VARCHAR) str = new std::string(std::move(v.s));
+    else if (type == VT_VECTOR && !vdisk) vec = new std::vector<float>(std::move(v.v));
+    else if (type == VT_VECTOR) voff = v.voff;
+    else if (type == VT_DOUBLE) d = v.d;
+    else i = v.i;
+  }
+  ~StoredValue() { clear(); }
+  StoredValue(const StoredValue &v) : type(v.type), vdisk(v.vdisk), vlen(v.vlen) {
+    std::memcpy(&i, &v.i, sizeof(i));
+    if (type == VT_VARCHAR) str = new std::string(*v.str);
+    else if (type == VT_VECTOR && !vdisk) vec = new std::vector<float>(*v.vec);
+  }
+  StoredValue(StoredValue &&v) noexcept { move_from(v); }
+  StoredValue &operator=(const StoredValue &v) {
+    if (this != &v) {
+      StoredValue copy(v);
+      *this = std::move(copy);
+    }
+    return *this;
+  }
+  StoredValue &operator=(StoredValue &&v) noexcept {
+    if (this != &v) {
+      clear();
+      move_from(v);
+    }
+    return *this;
+  }
+  StoredValue &operator=(Value v) {
+    StoredValue cell(std::move(v));
+    *this = std::move(cell);
+    return *this;
+  }
+  operator Value() const {
+    Value v;
+    v.type = type;
+    v.vdisk = vdisk;
+    v.vlen = vlen;
+    if (type == VT_VARCHAR) v.s = *str;
+    else if (type == VT_VECTOR && !vdisk) v.v = *vec;
+    else if (type == VT_VECTOR) v.voff = voff;
+    else if (type == VT_DOUBLE) v.d = d;
+    else v.i = i;
+    return v;
+  }
+
+ private:
+  void clear() {
+    if (type == VT_VARCHAR) delete str;
+    else if (type == VT_VECTOR && !vdisk) delete vec;
+  }
+  void move_from(StoredValue &v) noexcept {
+    type = v.type;
+    vdisk = v.vdisk;
+    vlen = v.vlen;
+    std::memcpy(&i, &v.i, sizeof(i));
+    v.type = VT_BIGINT;
+    v.vdisk = false;
+    v.i = 0;
+  }
+};
+static_assert(sizeof(StoredValue) == 16, "stored cell should stay compact");
+
 struct Row {
-  std::vector<Value> vals;
+  std::vector<StoredValue> vals;
   bool deleted = false;
 };
 
@@ -552,6 +671,16 @@ struct Table {
   std::unordered_map<int64_t, std::vector<size_t>> eqidx;
   int eqidx_col = -1;
   uint64_t eqidx_ver = ~0ull;
+  // Versioned, compact scan metadata avoids chasing three Value objects for
+  // every candidate.  Quantized payloads are bounded and rebuilt lazily.
+  struct ScanRow { int64_t pk; uint64_t off; };
+  struct QuantRow { int norm; int sum; double error; };
+  std::vector<ScanRow> scan_rows;
+  std::vector<QuantRow> quant_rows;
+  std::vector<int8_t> quant_codes;
+  uint64_t scan_ver = ~0ull;
+  int scan_col = -1;
+  double quant_scale = 0.0;
 };
 
 static std::string fmt_double(double d) {
@@ -611,31 +740,49 @@ static size_t utf8_len(const std::string &s) {
 
 static bool parse_vector_string(const std::string &text, std::vector<float> &out,
                                 std::string &err) {
-  std::string s = trim(text);
-  if (s.size() < 2 || s.front() != '[' || s.back() != ']') {
+  const char *p = text.data(), *end = p + text.size();
+  while (p < end && std::isspace((unsigned char)*p)) ++p;
+  while (p < end && std::isspace((unsigned char)end[-1])) --end;
+  if (end - p < 2 || *p != '[' || end[-1] != ']') {
     err = "vector literal must be [v1,v2,...]";
     return false;
   }
+  ++p;
+  --end;
   out.clear();
-  size_t i = 1;
-  while (i + 1 < s.size()) {
-    while (i + 1 < s.size() && (std::isspace((unsigned char)s[i]) || s[i] == ',')) ++i;
-    if (i + 1 >= s.size()) break;
-    char *end = nullptr;
-    errno = 0;
-    double d = std::strtod(s.c_str() + i, &end);
-    if (end == s.c_str() + i || errno == ERANGE) {
-      err = "invalid vector component";
-      return false;
+  out.reserve(128);
+  while (p < end) {
+    while (p < end && (std::isspace((unsigned char)*p) || *p == ',')) ++p;
+    if (p == end) break;
+    // from_chars avoids strtod's locale handling and decimal conversion cost
+    // for every coordinate.  Parse as double before the float32 conversion,
+    // retaining the same rounding and finite/range checks as the SQL path.
+    const char *number = p;
+    if (*number == '+') ++number;
+    double d = 0.0;
+    auto parsed = std::from_chars(number, end, d, std::chars_format::general);
+    const char *next = parsed.ptr;
+    if (number == end || (*p == '+' && (*number == '+' || *number == '-')) ||
+        parsed.ec != std::errc{} || next == number ||
+        (next < end && (*next == 'x' || *next == 'X')) ||
+        (d != 0.0 && std::fabs(d) < DBL_MIN)) {
+      // Keep the established handling of uncommon strtod syntax and range
+      // errors; the normal decimal vector path never enters this branch.
+      char *fallback_end = nullptr;
+      errno = 0;
+      d = std::strtod(p, &fallback_end);
+      if (fallback_end == p || fallback_end > end || errno == ERANGE) {
+        err = "invalid vector component";
+        return false;
+      }
+      next = fallback_end;
     }
     if (!std::isfinite(d) || std::fabs(d) > FLT_MAX) {
       err = "vector component is not a finite float32";
       return false;
     }
     out.push_back((float)d);
-    i = (size_t)(end - s.c_str());
-    while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
-    if (i < s.size() && s[i] == ',') ++i;
+    p = next;
   }
   return true;
 }
@@ -1854,10 +2001,11 @@ class Parser {
         bool is_float = t.find('.') != std::string::npos ||
                         t.find('e') != std::string::npos ||
                         t.find('E') != std::string::npos;
+        const std::string signed_number = "-" + t;
         char *end = nullptr;
         if (!is_float) {
           errno = 0;
-          long long v = std::strtoll(("-" + t).c_str(), &end, 10);
+          long long v = std::strtoll(signed_number.c_str(), &end, 10);
           if (end && *end == '\0' && errno == 0) {
             adv();
             auto e = std::make_shared<Expr>();
@@ -1867,7 +2015,7 @@ class Parser {
             return e;
           }
         } else {
-          double d = std::strtod(("-" + t).c_str(), &end);
+          double d = std::strtod(signed_number.c_str(), &end);
           if (end && *end == '\0') {
             adv();
             auto e = std::make_shared<Expr>();
@@ -2014,6 +2162,7 @@ class DB {
         if (!rec) wal_commit_one(raw);
         t.rows.clear();
         t.pkmap.clear();
+        ++t.version;
         return Result{};
       }
       case Stmt::OTHER:
@@ -2315,9 +2464,15 @@ class DB {
     if (std::fflush(wal_) != 0) return false;
     if (::fdatasync(::fileno(wal_)) != 0) return false;
 #ifdef POSIX_FADV_DONTNEED
-    // The WAL data is on stable storage after fdatasync; drop its clean page
-    // cache pages so the benchmark's peak memory does not retain the whole log.
-    ::posix_fadvise(::fileno(wal_), 0, 0, POSIX_FADV_DONTNEED);
+    // Drop durable full pages while retaining the append page.  Discarding
+    // through EOF also evicts a partial tail page, which the next transaction
+    // must read back before appending to it.
+    static const long page_size = ::sysconf(_SC_PAGESIZE);
+    if (page_size > 0) {
+      uint64_t complete_bytes = wal_bytes_ - wal_bytes_ % (uint64_t)page_size;
+      if (complete_bytes)
+        ::posix_fadvise(::fileno(wal_), 0, (off_t)complete_bytes, POSIX_FADV_DONTNEED);
+    }
 #endif
     return true;
   }
@@ -2637,20 +2792,22 @@ class DB {
         Row r;
         r.vals.resize(nc);
         for (size_t ci = 0; ci < r.vals.size(); ++ci) {
-          if (!get_value(f, r.vals[ci])) {
+          Value loaded;
+          if (!get_value(f, loaded)) {
             std::fclose(f);
             err = "invalid snapshot row";
             return false;
           }
           if (t.cols[ci].type == VT_VECTOR) {
             try {
-              r.vals[ci] = t.vecs.store(r.vals[ci]);
+              loaded = t.vecs.store(loaded);
             } catch (const std::exception &e) {
               std::fclose(f);
               err = std::string("vector snapshot load failed: ") + e.what();
               return false;
             }
           }
+          r.vals[ci] = std::move(loaded);
         }
         if (t.pk >= 0 && (size_t)t.pk < r.vals.size()) {
           int64_t key = r.vals[(size_t)t.pk].i;
@@ -2778,15 +2935,19 @@ class DB {
       }
     }
     if (target.empty()) throw syntax("no insert columns");
+    std::vector<bool> supplied(t.cols.size(), false);
+    for (int ci : target) supplied[(size_t)ci] = true;
     std::set<int64_t> newkeys;
     std::vector<Row> newrows;
+    newrows.reserve(st.insert_rows.size());
     for (const auto &src : st.insert_rows) {
       if (src.size() != target.size())
         throw SqlError(1136, "21S01",
                        "Column count doesn't match value count");
       Row r;
       r.vals.resize(t.cols.size());
-      for (size_t i = 0; i < t.cols.size(); ++i) r.vals[i] = default_value(t.cols[i]);
+      for (size_t i = 0; i < t.cols.size(); ++i)
+        if (!supplied[i]) r.vals[i] = default_value(t.cols[i]);
       for (size_t i = 0; i < target.size(); ++i) {
         Value v = eval(src[i], t, Row{});
         const Column &col = t.cols[(size_t)target[i]];
@@ -2966,6 +3127,99 @@ class DB {
     for (auto &kv : tables_) ++kv.second.version;
   }
 
+  // Cache at most 32 MiB of derived query data.  Large file-backed tables
+  // retain the existing streaming scan and do not acquire a second payload.
+  void prepare_scan(Table &t, int vcol) {
+    if (t.scan_ver == t.version && t.scan_col == vcol) return;
+    t.scan_rows.clear();
+    t.quant_rows.clear();
+    t.quant_codes.clear();
+    t.quant_scale = 0.0;
+    t.scan_ver = t.version;
+    t.scan_col = vcol;
+    const size_t count = t.rows.size();
+    const size_t dim = (size_t)t.cols[(size_t)vcol].len;
+    constexpr size_t budget = 32u * 1024 * 1024;
+    if (vcol != t.vec || count > budget / sizeof(Table::ScanRow)) {
+      std::vector<Table::ScanRow>().swap(t.scan_rows);
+      std::vector<Table::QuantRow>().swap(t.quant_rows);
+      std::vector<int8_t>().swap(t.quant_codes);
+      return;
+    }
+    const bool can_quant = count >= 512 && dim >= 16 && dim <= 4096 &&
+        count <= budget / (dim + sizeof(Table::ScanRow) + sizeof(Table::QuantRow));
+    if (!can_quant) {
+      std::vector<Table::QuantRow>().swap(t.quant_rows);
+      std::vector<int8_t>().swap(t.quant_codes);
+    }
+    // Account for retained allocation capacity after mutations.  Do not let
+    // vector growth double a derived cache beyond its total memory budget.
+    size_t planned = std::max(count, t.scan_rows.capacity()) * sizeof(Table::ScanRow);
+    if (can_quant) {
+      planned += std::max(count, t.quant_rows.capacity()) * sizeof(Table::QuantRow);
+      planned += std::max(count * dim, t.quant_codes.capacity());
+    }
+    if (planned > budget) {
+      std::vector<Table::ScanRow>().swap(t.scan_rows);
+      std::vector<Table::QuantRow>().swap(t.quant_rows);
+      std::vector<int8_t>().swap(t.quant_codes);
+    }
+    if (count > t.scan_rows.capacity())
+      std::vector<Table::ScanRow>(count).swap(t.scan_rows);
+    else
+      t.scan_rows.resize(count);
+    double maxabs = 0.0;
+    std::vector<float> scratch;
+    for (size_t i = 0; i < count; ++i) {
+      const Row &r = t.rows[i];
+      if (r.deleted) {
+        t.scan_rows[i] = {0, UINT64_MAX};
+        continue;
+      }
+      const auto &v = r.vals[(size_t)vcol];
+      if (v.type != VT_VECTOR || !v.vdisk || v.vlen != dim) {
+        t.scan_rows.clear();
+        return;
+      }
+      t.scan_rows[i] = {r.vals[(size_t)t.pk].i, v.voff};
+      if (can_quant) {
+        const float *p = t.vecs.get(v, scratch);
+        for (size_t j = 0; j < dim; ++j)
+          maxabs = std::max(maxabs, std::fabs((double)p[j]));
+      }
+    }
+    if (!can_quant || !std::isfinite(maxabs)) return;
+    const double scale = maxabs > 0.0 ? maxabs / 63.0 : 1.0;
+    if (count * dim > t.quant_codes.capacity())
+      std::vector<int8_t>(count * dim).swap(t.quant_codes);
+    else
+      t.quant_codes.resize(count * dim);
+    if (count > t.quant_rows.capacity())
+      std::vector<Table::QuantRow>(count).swap(t.quant_rows);
+    else
+      t.quant_rows.resize(count);
+    for (size_t i = 0; i < count; ++i) {
+      if (t.scan_rows[i].off == UINT64_MAX) continue;
+      const float *p = t.vecs.get(t.rows[i].vals[(size_t)vcol], scratch);
+      int norm = 0, sum = 0;
+      double error2 = 0.0;
+      for (size_t j = 0; j < dim; ++j) {
+        int c = (int)std::round((double)p[j] / scale);
+        c = std::max(-63, std::min(63, c));
+        t.quant_codes[i * dim + j] = (int8_t)c;
+        norm += c * c;
+        sum += c;
+        double error = (double)p[j] - c * scale;
+        error2 += error * error;
+      }
+      // Account for roundoff in the double arithmetic that constructs the
+      // code and its error radius.  This is tiny relative to quantization.
+      double error = std::sqrt(error2) + maxabs * std::sqrt((double)dim) * 1e-12;
+      t.quant_rows[i] = {norm, sum, error};
+    }
+    t.quant_scale = scale;
+  }
+
   // ---- SELECT --------------------------------------------------------------
   Result select_rows(const Stmt &st) {
     Result res;
@@ -3077,121 +3331,134 @@ class DB {
           uint64_t want = (uint64_t)st.offset + (uint64_t)st.limit;
           keep = (size_t)std::min<uint64_t>(want, total);
         }
-        // For a small LIMIT, keep a bounded max-heap of the best K instead of
-        // materializing all candidates and running nth_element over them.
+        // The compact cache and conservative quantized lower bound are
+        // derived data.  Quantization never supplies a result distance.
+        if (vcol != t.vec)
+          throw SqlError(1366, "22007", "L2_DISTANCE needs a VECTOR column");
+        const size_t dim = (size_t)t.cols[(size_t)vcol].len;
+        if (dim != oe.vec.size())
+          throw SqlError(1366, "22007", "Vector dimension mismatch");
         const bool use_heap = keep > 0 && keep <= 64 && keep < total;
-        static thread_local std::vector<Cand> heap;
-        heap.clear();
-        static thread_local std::vector<Cand> cands;
-        cands.clear();
-        if (use_heap) {
-          heap.reserve(keep);
-        } else {
-          cands.reserve(total);
+        prepare_scan(t, vcol);
+        const bool compact = t.scan_rows.size() == t.rows.size();
+        const float *base = t.vecs.raw_base();
+        const uint64_t mapped = t.vecs.mapped_bytes();
+        bool quantized = compact && asc && use_heap && t.quant_scale > 0.0;
+        static thread_local std::vector<uint8_t> query_codes;
+        int query_norm = 0;
+        double query_error = 0.0;
+        if (quantized) {
+          query_codes.resize(dim);
+          const double scale = t.quant_scale;
+          double error2 = 0.0, maxabs = 0.0;
+          for (size_t j = 0; j < dim; ++j) {
+            const double x = (double)oe.vec[j];
+            // Queries outside the cached code range use the normal scan.
+            if (!std::isfinite(x) || std::fabs(x) > 63.0 * scale) {
+              quantized = false;
+              break;
+            }
+            const int c = std::max(-63, std::min(63, (int)std::round(x / scale)));
+            query_codes[j] = (uint8_t)(c + 63);
+            query_norm += c * c;
+            const double e = x - c * scale;
+            error2 += e * e;
+            maxabs = std::max(maxabs, std::fabs(x));
+          }
+          query_error = std::sqrt(error2) + maxabs * std::sqrt((double)dim) * 1e-12;
         }
+        const uint8_t *query_code_data = query_codes.data();
+        const double scale2 = t.quant_scale * t.quant_scale;
+        // Widen the rejection radius for rounding in the existing float32
+        // kernel, including subnormal products.  Equality always survives.
+        const double fp_margin = 4.0 * FLT_EPSILON * (double)(dim + 8);
+        const double tiny_margin = 4.0 * std::sqrt((double)dim * FLT_MIN);
+        auto radius = [&](double d) {
+          return std::sqrt(d) * (1.0 + fp_margin) + tiny_margin + query_error;
+        };
+        static thread_local std::vector<Cand> selected;
+        selected.clear();
+        selected.reserve(use_heap ? keep : total);
+        auto scan_one = [&](size_t idx, std::vector<Cand> &out,
+                            double &threshold_radius, std::vector<float> &scratch) {
+          uint64_t off;
+          int64_t pk;
+          if (compact) {
+            const auto &r = t.scan_rows[idx];
+            if (r.off == UINT64_MAX) return;
+            off = r.off;
+            pk = r.pk;
+          } else {
+            const Row &r = t.rows[idx];
+            if (r.deleted) return;
+            const auto &v = r.vals[(size_t)vcol];
+            off = v.voff;
+            pk = r.vals[(size_t)t.pk].i;
+          }
+          if (quantized && out.size() == keep && std::isfinite(threshold_radius)) {
+            const auto &qr = t.quant_rows[idx];
+            const int dot = quant_dot(t.quant_codes.data() + idx * dim,
+                                      query_code_data, dim) - 63 * qr.sum;
+            const double quant_d = (qr.norm + query_norm - 2 * dot) * scale2;
+            const double bound = threshold_radius + qr.error;
+            if (quant_d > bound * bound) return;
+          }
+          const float *p = base && off + dim * sizeof(float) <= mapped
+                               ? base + off / sizeof(float)
+                               : t.vecs.get(t.rows[idx].vals[(size_t)vcol], scratch);
+          Cand c{(double)l2_sq_f32(p, oe.vec.data(), dim), pk, idx};
+          if (!use_heap) {
+            out.push_back(c);
+          } else if (out.size() < keep) {
+            out.push_back(c);
+            std::push_heap(out.begin(), out.end(), cmp);
+            if (out.size() == keep && quantized) threshold_radius = radius(out.front().d);
+          } else if (cmp(c, out.front())) {
+            std::pop_heap(out.begin(), out.end(), cmp);
+            out.back() = c;
+            std::push_heap(out.begin(), out.end(), cmp);
+            if (quantized) threshold_radius = radius(out.front().d);
+          }
+        };
 #ifdef _OPENMP
         if (no_filter && use_heap && t.rows.size() >= 2000) {
           const int NT = 2;
           std::vector<Cand> locals[NT];
-          const long long nrows = (long long)t.rows.size();
           #pragma omp parallel num_threads(NT)
           {
             const int tid = omp_get_thread_num();
-            std::vector<float> lscratch;
-            const float *base = t.vecs.raw_base();
-            const uint64_t mapped = t.vecs.mapped_bytes();
-            std::vector<Cand> &lh = locals[tid];
-            lh.reserve(keep);
+            std::vector<float> scratch;
+            std::vector<Cand> &out = locals[tid];
+            out.reserve(keep);
+            double threshold_radius = std::numeric_limits<double>::infinity();
+            const long long nrows = (long long)t.rows.size();
             #pragma omp for schedule(static)
-            for (long long ii = 0; ii < nrows; ++ii) {
-              const size_t idx = (size_t)ii;
-              if (t.rows[idx].deleted) continue;
-              const Row &r = t.rows[idx];
-              const Value &v = r.vals[(size_t)vcol];
-              const float *p = (base && v.voff + (uint64_t)v.vlen * 4 <= mapped)
-                                   ? base + v.voff / 4
-                                   : t.vecs.get(v, lscratch);
-              if (base && ii + 1 < nrows) {
-                const Row &nr = t.rows[(size_t)ii + 1];
-                if (!nr.deleted) {
-                  const Value &nv = nr.vals[(size_t)vcol];
-                  if (nv.voff + 64 <= mapped)
-                    _mm_prefetch((const char *)(base + nv.voff / 4), _MM_HINT_T0);
-                }
-              }
-              Cand c{(double)l2_sq_f32(p, oe.vec.data(), (size_t)v.vlen),
-                     r.vals[(size_t)t.pk].i, idx};
-              if (lh.size() < keep) {
-                lh.push_back(c);
-                std::push_heap(lh.begin(), lh.end(), cmp);
-              } else if (cmp(c, lh.front())) {
-                std::pop_heap(lh.begin(), lh.end(), cmp);
-                lh.back() = c;
-                std::push_heap(lh.begin(), lh.end(), cmp);
-              }
-            }
+            for (long long i = 0; i < nrows; ++i)
+              scan_one((size_t)i, out, threshold_radius, scratch);
           }
-          std::vector<Cand> merged;
-          merged.reserve(locals[0].size() + locals[1].size());
-          merged.insert(merged.end(), locals[0].begin(), locals[0].end());
-          merged.insert(merged.end(), locals[1].begin(), locals[1].end());
-          std::sort(merged.begin(), merged.end(), cmp);
-          if (merged.size() > keep) merged.resize(keep);
-          matches.clear();
-          matches.reserve(merged.size());
-          for (const auto &c : merged) matches.push_back(c.idx);
+          selected.insert(selected.end(), locals[0].begin(), locals[0].end());
+          selected.insert(selected.end(), locals[1].begin(), locals[1].end());
         } else
 #endif
         {
-        std::vector<float> scratch;
-        auto consider = [&](size_t idx) {
-          const Row &r = t.rows[idx];
-          const Value &v = r.vals[(size_t)vcol];
-          if (v.type != VT_VECTOR)
-            throw SqlError(1366, "22007", "L2_DISTANCE needs a VECTOR column");
-          size_t n = v.vdisk ? (size_t)v.vlen : v.v.size();
-          if (n != oe.vec.size())
-            throw SqlError(1366, "22007", "Vector dimension mismatch");
-          const float *base = t.vecs.raw_base();
-          const float *p = (base && v.voff + (uint64_t)v.vlen * 4 <= t.vecs.mapped_bytes())
-                               ? base + v.voff / 4
-                               : t.vecs.get(v, scratch);
-          // Squared distance preserves the ordering; sqrt is only needed when
-          // the distance itself is projected, and that path evaluates it.
-          Cand c{(double)l2_sq_f32(p, oe.vec.data(), n),
-                 r.vals[(size_t)t.pk].i, idx};
-          if (use_heap) {
-            if (heap.size() < keep) {
-              heap.push_back(c);
-              std::push_heap(heap.begin(), heap.end(), cmp);
-            } else if (cmp(c, heap.front())) {
-              std::pop_heap(heap.begin(), heap.end(), cmp);
-              heap.back() = c;
-              std::push_heap(heap.begin(), heap.end(), cmp);
-            }
+          std::vector<float> scratch;
+          double threshold_radius = std::numeric_limits<double>::infinity();
+          if (no_filter) {
+            for (size_t i = 0; i < t.rows.size(); ++i)
+              scan_one(i, selected, threshold_radius, scratch);
           } else {
-            cands.push_back(c);
+            for (size_t i : matches) scan_one(i, selected, threshold_radius, scratch);
           }
-        };
-        if (no_filter) {
-          for (size_t idx = 0; idx < t.rows.size(); ++idx) {
-            if (t.rows[idx].deleted) continue;
-            consider(idx);
-          }
-        } else {
-          for (size_t idx : matches) consider(idx);
         }
-        std::vector<Cand> *selected = use_heap ? &heap : &cands;
-        if (!use_heap && keep < selected->size()) {
-          std::nth_element(selected->begin(), selected->begin() + (std::ptrdiff_t)keep,
-                           selected->end(), cmp);
-          selected->resize(keep);
+        if (keep < selected.size()) {
+          std::nth_element(selected.begin(), selected.begin() + (std::ptrdiff_t)keep,
+                           selected.end(), cmp);
+          selected.resize(keep);
         }
-        std::sort(selected->begin(), selected->end(), cmp);
+        std::sort(selected.begin(), selected.end(), cmp);
         matches.clear();
-        matches.reserve(selected->size());
-        for (const auto &c : *selected) matches.push_back(c.idx);
-        }
+        matches.reserve(selected.size());
+        for (const auto &c : selected) matches.push_back(c.idx);
       } else {
         std::stable_sort(matches.begin(), matches.end(), [&](size_t a, size_t b) {
           const Row &ra = t.rows[a], &rb = t.rows[b];
@@ -3310,10 +3577,37 @@ static void split_statements(std::string &buf, std::vector<std::string> &out) {
 static volatile std::sig_atomic_t g_stop = 0;
 static void on_signal(int) { g_stop = 1; }
 
+// Read whole spans instead of routing each input byte through synchronized
+// iostreams.  Handle EINTR here so SIGTERM can stop an idle input read; the
+// unsynchronized libstdc++ stream buffer may otherwise retry it indefinitely.
+static bool read_input_line(std::string &line) {
+  static char buffer[64 * 1024];
+  static size_t pos = 0, size = 0;
+  line.clear();
+  while (!g_stop) {
+    if (pos == size) {
+      ssize_t n = ::read(STDIN_FILENO, buffer, sizeof buffer);
+      if (n < 0) {
+        if (errno == EINTR) continue;
+        return !line.empty();
+      }
+      if (n == 0) return !line.empty();
+      pos = 0;
+      size = (size_t)n;
+    }
+    const char *newline = (const char *)std::memchr(buffer + pos, '\n', size - pos);
+    size_t n = newline ? (size_t)(newline - (buffer + pos)) : size - pos;
+    line.append(buffer + pos, n);
+    pos += n;
+    if (newline) { ++pos; return true; }
+  }
+  return false;
+}
+
 static int legacy_main(DB &db) {
   std::string buf, line;
   bool done = false;
-  while (!g_stop && std::getline(std::cin, line)) {
+  while (!g_stop && read_input_line(line)) {
     std::string t = trim(line);
     if (ieq(t, "exit") || ieq(t, "quit")) break;
     if (starts_with_ci(t, "DELIMITER")) continue;
@@ -3371,7 +3665,7 @@ static int protocol_main(DB &db) {
   std::cout << "{\"type\":\"ready\"}\n";
   std::cout.flush();
   std::string line;
-  while (!g_stop && std::getline(std::cin, line)) {
+  while (!g_stop && read_input_line(line)) {
     if (trim(line).empty()) continue;
     JRequest req;
     std::string perr;
@@ -3415,6 +3709,10 @@ static int protocol_main(DB &db) {
 }
 
 int main(int argc, char **argv) {
+  // Responses explicitly flush at protocol boundaries; output needs no stdio
+  // synchronization, and input uses the buffered, interruptible reader above.
+  std::ios::sync_with_stdio(false);
+  std::cin.tie(nullptr);
   std::string dir = "/data";
   if (const char *e = std::getenv("VECTORDB_DATA_DIR")) dir = e;
   else if (const char *e = std::getenv("DATA_DIR")) dir = e;
