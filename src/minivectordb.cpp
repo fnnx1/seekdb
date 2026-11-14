@@ -546,6 +546,10 @@ struct Table {
   std::vector<Row> rows;
   std::unordered_map<int64_t, size_t> pkmap;
   VectorStore vecs;
+  uint64_t version = 0;
+  std::unordered_map<int64_t, std::vector<size_t>> eqidx;
+  int eqidx_col = -1;
+  uint64_t eqidx_ver = ~0ull;
 };
 
 static std::string fmt_double(double d) {
@@ -1828,7 +1832,7 @@ class DB {
         if (in_tx_) throw SqlError(1568, "25001", "transaction already in progress");
         in_tx_ = true;
         undo_.clear();
-        tx_sql_.clear();
+        tx_ops_.clear();
         return Result{};
       }
       case Stmt::COMMIT: {
@@ -1931,7 +1935,11 @@ class DB {
   bool in_tx_ = false;
   bool closed_ = false;
   std::vector<Undo> undo_;
-  std::vector<std::string> tx_sql_;
+  struct WalOp {
+    uint8_t type;
+    std::string payload;
+  };
+  std::vector<WalOp> tx_ops_;
   uint64_t seq_ = 0;
   uint64_t last_seq_ = 0;
   uint64_t wal_bytes_ = 0;
@@ -2198,14 +2206,133 @@ class DB {
   }
 
   void wal_commit_tx() {
-    for (const auto &s : tx_sql_) {
-      std::string sql = s;
-      if (!sql.empty() && sql.back() != ';') sql.push_back(';');
-      if (!wal_record(1, sql)) throw SqlError(1105, "HY000", "WAL write failed");
+    for (const auto &op : tx_ops_) {
+      std::string payload = op.payload;
+      if (op.type == 1 && !payload.empty() && payload.back() != ';')
+        payload.push_back(';');
+      if (!wal_record(op.type, payload))
+        throw SqlError(1105, "HY000", "WAL write failed");
     }
     if (!wal_record(2, "") || !wal_sync())
       throw SqlError(1105, "HY000", "WAL write failed");
     last_seq_ = seq_;
+  }
+
+  void wal_commit_rows(const std::string &tname, const std::vector<Row> &rows) {
+    if (!wal_record(3, encode_rows(tname, rows)) || !wal_record(2, "") ||
+        !wal_sync())
+      throw SqlError(1105, "HY000", "WAL write failed");
+    last_seq_ = seq_;
+  }
+
+  // Compact row encoding for the WAL: table name, column count and each
+  // stored row's typed values.  Vector payloads are written directly from the
+  // vector store, avoiding the much larger SQL text.
+  std::string encode_rows(const std::string &tname, const std::vector<Row> &rows) {
+    const Table &t = table(tname);
+    std::string out;
+    auto p32 = [&](uint32_t v) { out.append((const char *)&v, 4); };
+    auto p64 = [&](uint64_t v) { out.append((const char *)&v, 8); };
+    p32((uint32_t)tname.size());
+    out.append(tname);
+    p32((uint32_t)t.cols.size());
+    p64((uint64_t)rows.size());
+    std::vector<float> scratch;
+    for (const auto &r : rows) {
+      for (size_t ci = 0; ci < r.vals.size(); ++ci) {
+        const Value &v = r.vals[ci];
+        out.push_back((char)v.type);
+        if (v.type == VT_BIGINT) {
+          p64((uint64_t)v.i);
+        } else if (v.type == VT_DOUBLE) {
+          out.append((const char *)&v.d, 8);
+        } else if (v.type == VT_VARCHAR) {
+          p32((uint32_t)v.s.size());
+          out.append(v.s);
+        } else if (v.type == VT_VECTOR) {
+          uint32_t d = (uint32_t)(v.vdisk ? v.vlen : v.v.size());
+          const float *p = t.vecs.get(v, scratch);
+          p32(d);
+          out.append((const char *)p, (size_t)d * 4);
+        } else {
+          throw SqlError(1105, "HY000", "unsupported WAL value");
+        }
+      }
+    }
+    return out;
+  }
+
+  void apply_wal_rows(const std::string &payload) {
+    size_t off = 0;
+    auto need = [&](size_t n) {
+      if (off + n > payload.size())
+        throw SqlError(1105, "HY000", "WAL row decode");
+    };
+    auto r32 = [&]() {
+      need(4);
+      uint32_t v;
+      std::memcpy(&v, payload.data() + off, 4);
+      off += 4;
+      return v;
+    };
+    auto r64 = [&]() {
+      need(8);
+      uint64_t v;
+      std::memcpy(&v, payload.data() + off, 8);
+      off += 8;
+      return v;
+    };
+    uint32_t nl = r32();
+    need(nl);
+    std::string tn(payload.data() + off, nl);
+    off += nl;
+    Table &t = table(tn);
+    uint32_t nc = r32();
+    if (nc != (uint32_t)t.cols.size())
+      throw SqlError(1105, "HY000", "WAL row column count");
+    uint64_t nr = r64();
+    for (uint64_t k = 0; k < nr; ++k) {
+      Row r;
+      r.vals.resize(nc);
+      for (uint32_t ci = 0; ci < nc; ++ci) {
+        need(1);
+        uint8_t ty = (uint8_t)payload[off++];
+        Value v;
+        v.type = ty;
+        if (ty == VT_BIGINT) {
+          v.i = (int64_t)r64();
+        } else if (ty == VT_DOUBLE) {
+          need(8);
+          std::memcpy(&v.d, payload.data() + off, 8);
+          off += 8;
+        } else if (ty == VT_VARCHAR) {
+          uint32_t l = r32();
+          need(l);
+          v.s.assign(payload.data() + off, l);
+          off += l;
+        } else if (ty == VT_VECTOR) {
+          uint32_t d = r32();
+          need((size_t)d * 4);
+          if ((int)d != t.cols[ci].len)
+            throw SqlError(1105, "HY000", "WAL vector dim");
+          Value ov;
+          ov.type = VT_VECTOR;
+          ov.v.assign((const float *)(payload.data() + off),
+                      (const float *)(payload.data() + off) + d);
+          off += (size_t)d * 4;
+          v = t.vecs.store(ov);
+        } else {
+          throw SqlError(1105, "HY000", "WAL row type");
+        }
+        r.vals[ci] = std::move(v);
+      }
+      int64_t key = r.vals[(size_t)t.pk].i;
+      if (t.pkmap.count(key))
+        throw SqlError(1062, "23000", "Duplicate entry in WAL replay");
+      size_t idx = t.rows.size();
+      t.pkmap[key] = idx;
+      t.rows.push_back(std::move(r));
+    }
   }
 
   // ---- snapshots -----------------------------------------------------------
@@ -2406,7 +2533,7 @@ class DB {
     std::string p = (fs::path(dir_) / "wal.bin").string();
     FILE *f = std::fopen(p.c_str(), "rb");
     if (!f) return true;
-    std::vector<std::string> buf;
+    std::vector<WalOp> buf;
     uint64_t maxseq = last_seq_;
     for (;;) {
       uint32_t len = 0, crc = 0;
@@ -2425,18 +2552,22 @@ class DB {
       c = crc32_update(c, payload.data(), payload.size());
       c ^= 0xFFFFFFFFu;
       if (c != crc) break;
-      if (type == 1) {
-        buf.push_back(payload);
+      if (type == 1 || type == 3) {
+        buf.push_back({type, payload});
       } else if (type == 2) {
         if (sq > last_seq_) {
-          for (auto &sql : buf) {
+          for (auto &op : buf) {
             try {
-              recovering_ = true;
-              Result ignored = exec_sql(sql, true);
-              (void)ignored;
+              if (op.type == 1) {
+                recovering_ = true;
+                Result ignored = exec_sql(op.payload, true);
+                (void)ignored;
+              } else {
+                apply_wal_rows(op.payload);
+              }
             } catch (const SqlError &e) {
               std::cerr << "WAL replay error [" << e.code << "]: " << e.what()
-                        << " sql=" << sql.substr(0, 200) << "\n";
+                        << " payload=" << op.payload.substr(0, 120) << "\n";
             } catch (const std::exception &e) {
               std::cerr << "WAL replay exception: " << e.what() << "\n";
             }
@@ -2532,7 +2663,9 @@ class DB {
       newkeys.insert(key);
       newrows.push_back(std::move(r));
     }
-    if (!in_tx_ && !recovering) wal_commit_one(raw);
+    if (!in_tx_ && !recovering) wal_commit_rows(st.table, newrows);
+    std::string tx_wal;
+    if (in_tx_ && !recovering) tx_wal = encode_rows(st.table, newrows);
     for (auto &r : newrows) {
       int64_t key = r.vals[(size_t)t.pk].i;
       size_t idx = t.rows.size();
@@ -2540,7 +2673,8 @@ class DB {
       if (in_tx_) undo_.push_back({1, st.table, key, idx, Row{}});
       t.rows.push_back(std::move(r));
     }
-    if (in_tx_) tx_sql_.push_back(raw);
+    if (in_tx_ && !recovering) tx_ops_.push_back({3, std::move(tx_wal)});
+    ++t.version;
     return (int64_t)newrows.size();
   }
 
@@ -2629,7 +2763,8 @@ class DB {
       if (in_tx_) undo_.push_back({2, st.table, row_pk(t, old), idx, old});
       t.rows[idx] = std::move(news[i]);
     }
-    if (in_tx_) tx_sql_.push_back(raw);
+    if (in_tx_) tx_ops_.push_back({1, raw});
+    ++t.version;
     return changed;
   }
 
@@ -2651,15 +2786,16 @@ class DB {
       t.rows[idx].deleted = true;
       t.pkmap.erase(key);
     }
-    if (in_tx_) tx_sql_.push_back(raw);
+    if (in_tx_) tx_ops_.push_back({1, raw});
+    ++t.version;
     return (int64_t)hits.size();
   }
 
   // ---- transactions --------------------------------------------------------
   void commit_tx() {
-    if (!tx_sql_.empty()) wal_commit_tx();
+    if (!tx_ops_.empty()) wal_commit_tx();
     undo_.clear();
-    tx_sql_.clear();
+    tx_ops_.clear();
     in_tx_ = false;
   }
 
@@ -2683,8 +2819,9 @@ class DB {
       }
     }
     undo_.clear();
-    tx_sql_.clear();
+    tx_ops_.clear();
     in_tx_ = false;
+    for (auto &kv : tables_) ++kv.second.version;
   }
 
   // ---- SELECT --------------------------------------------------------------
@@ -2741,20 +2878,39 @@ class DB {
     static thread_local std::vector<size_t> matches;
     matches.clear();
     if (!l2_hot || !no_filter) {
-      matches.reserve(t.rows.size());
-      for (size_t i = 0; i < t.rows.size(); ++i) {
-        if (t.rows[i].deleted) continue;
-        if (fast_col >= 0) {
-          const Value &v = t.rows[i].vals[(size_t)fast_col];
-          if (v.type == VT_BIGINT && fast_val.type == VT_BIGINT) {
-            if (v.i != fast_val.i) continue;
-          } else if (value_cmp(v, fast_val) != 0) {
+      if (fast_col >= 0 && fast_val.type == VT_BIGINT &&
+          t.cols[(size_t)fast_col].type == VT_BIGINT) {
+        // Hash index for `col = literal`: the benchmark repeats the same
+        // equality filter many times after the load.  Built lazily and
+        // invalidated by every mutation version bump.
+        if (t.eqidx_col != fast_col || t.eqidx_ver != t.version) {
+          t.eqidx.clear();
+          for (size_t i = 0; i < t.rows.size(); ++i) {
+            if (t.rows[i].deleted) continue;
+            const Value &v = t.rows[i].vals[(size_t)fast_col];
+            if (v.type == VT_BIGINT) t.eqidx[v.i].push_back(i);
+          }
+          t.eqidx_col = fast_col;
+          t.eqidx_ver = t.version;
+        }
+        auto it = t.eqidx.find(fast_val.i);
+        if (it != t.eqidx.end()) matches = it->second;
+      } else {
+        matches.reserve(t.rows.size());
+        for (size_t i = 0; i < t.rows.size(); ++i) {
+          if (t.rows[i].deleted) continue;
+          if (fast_col >= 0) {
+            const Value &v = t.rows[i].vals[(size_t)fast_col];
+            if (v.type == VT_BIGINT && fast_val.type == VT_BIGINT) {
+              if (v.i != fast_val.i) continue;
+            } else if (value_cmp(v, fast_val) != 0) {
+              continue;
+            }
+          } else if (!where_matches(st.where, t, t.rows[i])) {
             continue;
           }
-        } else if (!where_matches(st.where, t, t.rows[i])) {
-          continue;
+          matches.push_back(i);
         }
-        matches.push_back(i);
       }
     }
     if (!orders.empty()) {
@@ -2800,6 +2956,8 @@ class DB {
           {
             const int tid = omp_get_thread_num();
             std::vector<float> lscratch;
+            const float *base = t.vecs.raw_base();
+            const uint64_t mapped = t.vecs.mapped_bytes();
             std::vector<Cand> &lh = locals[tid];
             lh.reserve(keep);
             #pragma omp for schedule(static)
@@ -2808,7 +2966,9 @@ class DB {
               if (t.rows[idx].deleted) continue;
               const Row &r = t.rows[idx];
               const Value &v = r.vals[(size_t)vcol];
-              const float *p = t.vecs.get(v, lscratch);
+              const float *p = (base && v.voff + (uint64_t)v.vlen * 4 <= mapped)
+                                   ? base + v.voff / 4
+                                   : t.vecs.get(v, lscratch);
               Cand c{(double)l2_sq_f32(p, oe.vec.data(), (size_t)v.vlen),
                      r.vals[(size_t)t.pk].i, idx};
               if (lh.size() < keep) {
@@ -2842,7 +3002,10 @@ class DB {
           size_t n = v.vdisk ? (size_t)v.vlen : v.v.size();
           if (n != oe.vec.size())
             throw SqlError(1366, "22007", "Vector dimension mismatch");
-          const float *p = t.vecs.get(v, scratch);
+          const float *base = t.vecs.raw_base();
+          const float *p = (base && v.voff + (uint64_t)v.vlen * 4 <= t.vecs.mapped_bytes())
+                               ? base + v.voff / 4
+                               : t.vecs.get(v, scratch);
           // Squared distance preserves the ordering; sqrt is only needed when
           // the distance itself is projected, and that path evaluates it.
           Cand c{(double)l2_sq_f32(p, oe.vec.data(), n),
