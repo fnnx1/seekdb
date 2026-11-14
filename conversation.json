@@ -5,10 +5,10 @@
   "status": "technical_joint_record_2026-11-14",
   "synthetic": false,
   "language": "zh-CN",
-  "notes": "Technical learning record recovered from the actual collaboration: the student proposed the technical direction and acceptance criteria, the agent implemented and measured, and the results are actual tool/platform outputs. Directions are condensed/recovered except c21, which is a student-provided verbatim reflection (2026-11-14); no experimental numbers are invented. The in-memory vector prefix and WAL-size-based shutdown-snapshot skip are explicitly marked as not yet verified.",
+  "notes": "Technical learning record recovered from the actual collaboration: the student proposed the technical direction and acceptance criteria, the agent implemented and measured, and the results are actual tool/platform outputs. c21 is a student-provided verbatim reflection (2026-11-14); c22 is a recovered student direction for the exact-pruning exploration. No experimental numbers are invented; the exact-pruning candidate 8a55a2f is verified locally (integer oracle + SIGKILL recovery + full check) but not formally evaluated.",
   "public_cases": "mysqltest v4 (20 cases/95 SQL); official JSONL checker handshake + 20/20 PASS on host and Docker",
   "official_driver": "STDIO_PROTOCOL.md + protocol_check; formal 29 cases (9 hidden) passed on 2026-11-11",
-  "platform_result": "2026-11-13: a246a0f MySQL pass, E=1495.208476, prompt raw 14.5; 742b6cf MySQL pass, E=1518.604488, prompt raw 15.5. 2026-11-14: ba4f1bf (in-memory vector prefix + small-WAL shutdown without snapshot) MySQL pass, E=1681.836634; its Agent Prompt result was returned invalid for that round (same material had scored 14.5/15.5 earlier). Leaderboard: prompt raw 15.5 rank 13 (34 pts); performance E 1681.836634 rank ~150, 0 pts; combined 41, total 654."
+  "platform_result": "2026-11-13: a246a0f MySQL pass, E=1495.208476, prompt raw 14.5; 742b6cf MySQL pass, E=1518.604488, prompt raw 15.5. 2026-11-14: ba4f1bf MySQL pass, E=1681.836634; its Agent Prompt result was returned invalid for that round (same material had scored 14.5/15.5 earlier). 2026-11-14 exact-pruning candidate 8a55a2f is not submitted; local 7-round benchmark vs 03e528d: write 1.53x, filtered 1.44x, unfiltered 2.23x, all queries 1.92x; RSS 15.15→14.34MiB. Leaderboard: prompt raw 15.5 rank 13 (34 pts); performance rank 164, 0 pts; combined 41, total 654."
  },
  "user_prompts": [
   {
@@ -266,6 +266,18 @@
    "attempt": "协议：实现 ready/execute/shutdown 与 typed error；BIGINT：符号随数字一起 strtoll 并加最小/最大值回归。性能：AVX2/FMA 平方距离、单列等值快路径、≤64 的有界堆；1M 数据改为 VectorStore 文件后备；4M 记录写入/重启耗时。材料：按低分修正 evidence 字段与引用格式；最近在 ba4f1bf 尝试内存向量前缀与按 WAL 大小跳快照。",
    "result": "协议对齐后官方 20/20、正式 29 用例通过；BIGINT 最小值回归通过。10K×128D 的 1000 次查询从 0.68s 降到 0.13s，但正式 E 从 967 只到 1518；1M 数据峰值约 375MB；4M 写入约 17s、重启恢复约 37.9s。ba4f1bf（内存向量前缀 + 按 WAL 大小跳快照）正式 E=1681.836634，较 1518.6 有提升，但该轮 Prompt 评测返回无效；收益以 E 为准，材料仍需复核。",
    "student_takeaway": "协议和错误结构是准入前提；本地微基准只优化了 T 的一部分，正式 E 还受写回、内存和启动成本影响；必须先确认成本项再优化，未经验证的改动不能当作收益。"
+  },
+  {
+   "id": "c22",
+   "role": "student",
+   "source": "recovered_student_direction_exact_pruning_2026-11-14",
+   "dimension_hint": "独立验证与质疑",
+   "content": "我做 exact TopK 的性能探索时，先确认不能牺牲精确性：用 6-bit 有符号量化建派生缓存，查询和库向量都量化，用三角不等式 dist(x,q) ≥ dist(x',q') - e(x) - e(q) 做下界拒绝；只有下界超过当前第 K 名半径才跳过，存活者仍用原始 float32 距离和主键并列规则排序，量化和误差只用于拒绝，不提供结果距离。10K×128D 上不过滤查询 64→29ms、过滤 27→19ms，写 265→173ms，RSS 降 5%。我还把行单元格压到 16B、协议输入缓冲化、WAL 只保留部分尾页。局限是量化在离群点/近似并列时可能退化到接近全扫，4M 未跑，正式 E 未知。",
+   "context": "exact TopK 的性能探索：先固定精确性，再用量化下界做拒绝；拒绝之外的结果必须用原始距离复核。",
+   "agent_analysis": "把 128 维 float32 向量按全表 maxabs/63 量化成 6-bit 有符号码，派生缓存记录每行量化模、和与残差半径；查询同样量化并计算查询误差。用 ||x-x'||、||q-q'|| 的三角不等式得到真实距离的保守下界，只有下界超过当前第 K 名半径才跳过；存活行用原始 float32 距离核和主键并列规则重新排序。拒绝半径额外加浮点舍入裕量，边界（相等）永远保留。",
+   "attempt": "实现量化缓存（每表 32MiB 上限，大表回退流式扫描）、int8 AVX2 点积；行单元格 88B→16B；协议输入缓冲化 + from_chars；WAL fdatasync 只丢完整页、保留部分尾页。用整数 oracle 校验全部 1,000 条查询，并在 SIGKILL 恢复后再校验 1,000 条；7 轮交替基准对比 03e528d。",
+   "result": "同一台机器、CPU 0-1、NVMe，7 轮交替中位数：写 100 次提交 265.33→173.36ms（1.53×），500 过滤查询 26.81→18.57ms（1.44×），500 不过滤 64.12→28.74ms（2.23×），查询合计 90.88→47.28ms（1.92×），峰值 RSS 15.15→14.34MiB；7,000 次初始查询与 7,000 次 SIGKILL 恢复后查询全部与整数 oracle 一致。",
+   "student_takeaway": "exact 约束下量化只能当拒绝过滤器，不能提供结果距离；存活者必须用原始距离复核。收益在常规分布明显，但离群点/近似并列会退化，所以精确性和边界校验优先于吞吐。"
   }
  ],
  "experiments": [
@@ -413,13 +425,21 @@
    "command": "platform records 47252848/47252862 + leaderboard 2026-11-14",
    "output": "query 0.68s→0.13s locally (~5x); formal E 967→1495→1518→1681.8 (~1.74x); prompt 14.5/15.5; ba4f1bf prompt invalid this round; current prompt rank 13 (34 pts), combined 41, total 654.",
    "status": "observed"
+  },
+  {
+   "id": "e19",
+   "owner": "student+agent",
+   "hypothesis": "exact TopK 可以用量化下界剪枝而不改变结果",
+   "command": "tests/performance_bench.py --rounds 7 --cpus 0,1; integer oracle + SIGKILL recovery",
+   "output": "vs 03e528d: write 265.33→173.36ms (1.53x); filtered 26.81→18.57ms (1.44x); unfiltered 64.12→28.74ms (2.23x); all queries 90.88→47.28ms (1.92x); RSS 15.15→14.34MiB; 7,000 initial + 7,000 recovered queries exact; full check passed.",
+   "status": "observed"
   }
  ],
  "platform_observations": {
   "old_record": "记录 47249429（commit 6cec8a6）状态=4（已取消），未判题",
   "new_record": "记录 47249444（commit 9720e3e）状态=2（执行成功），MySQL 正式用例通过（成功 1 / 失败 0）",
   "leaderboard": "性能 E=967.672080（性能排名 129/162，0 分）；Agent Prompt 原始分 3.0（排名 37/162，22 分）；加赛综合 22 分，总榜第 63。",
-  "latest_records": "a246a0f: E=1495.208476, prompt 14.5. 742b6cf: E=1518.604488, prompt 15.5. ba4f1bf: E=1681.836634 (best so far); prompt invalid this round (evaluation variance on the same material).",
+  "latest_records": "a246a0f: E=1495.208476, prompt 14.5. 742b6cf: E=1518.604488, prompt 15.5. ba4f1bf: E=1681.836634 (best formal so far); prompt invalid that round. 8a55a2f (exact pruning) verified locally, not submitted.",
   "leaderboard_2026_11_14": "prompt raw 15.5 rank 13 (34 pts); performance E=1518.604488 rank 164 (0 pts); combined rank 41; total 654."
  },
  "retrospective": [
@@ -447,6 +467,11 @@
    "id": "r5",
    "owner": "student",
    "content": "本地微基准（查询 T）提升约 5×，正式 E 只提升约 1.6×；正式 E 还包含写回、内存和启动成本，后续应优先降低 B/M，而不是只压查询循环。"
+  },
+  {
+   "id": "r6",
+   "owner": "student",
+   "content": "exact 约束下，量化只能做拒绝过滤器；存活者必须用原始距离复核。先把精确性和边界校验固定，再谈吞吐。"
   }
  ],
  "limitations": [
@@ -456,7 +481,8 @@
   "性能榜与头部差距明显，后续需要 ANN/多线程/SIMD 等独立优化路线；本版本优先保证准入与正确性。",
   "材料中的学生方向为恢复/压缩记录，不是逐字对话；实验结果与平台记录为实际观察，未编造数字。",
   "c21 之后的内存向量前缀与按 WAL 大小跳过关闭快照仍在正式验证中；在拿到 ba4f1bf 的 E 前不把它们写成已确认收益。",
-  "Prompt 评测存在无效轮次：同一份材料在 742b6cf 得 15.5，在 ba4f1bf 被判无效；不能把单轮无效当成材料一定有问题，但需要保留可复核的引用与摘要。"
+  "Prompt 评测存在无效轮次：同一份材料在 742b6cf 得 15.5，在 ba4f1bf 被判无效；不能把单轮无效当成材料一定有问题，但需要保留可复核的引用与摘要。",
+  "量化拒绝在离群点、近似并列或其他分布上可能退化到接近全扫；4M 行未跑；8a55a2f 尚未正式评测，不能把本地倍数当成正式 E 倍数。"
  ],
  "student_evidence": [
   {
@@ -691,6 +717,20 @@
    "result_evidence": {
     "pointer": "/conversations/16/result",
     "quote": "10K×128D 的 1000 次查询从 0.68s 降到 0.13s，但正式 E 从 967 只到 1518"
+   },
+   "expected_tier": "2.0"
+  },
+  {
+   "id": "c22",
+   "dimension": "独立验证与质疑",
+   "reason": "学生先固定 exact 不可牺牲，再把 6-bit 量化限定为拒绝过滤器：三角不等式下界、误差半径、浮点裕量、并列必保留，存活者用原始 float32 距离复核；随后用整数 oracle 和 SIGKILL 恢复验证精确性，并明确指出离群点/近似并列的退化与 4M 未跑。属于“约束→方法→验证→局限”的 2.0 档实例。",
+   "student_evidence": {
+    "pointer": "/conversations/17/content",
+    "quote": "量化和误差只用于拒绝，不提供结果距离"
+   },
+   "result_evidence": {
+    "pointer": "/conversations/17/result",
+    "quote": "500 不过滤 64.12→28.74ms（2.23×），查询合计 90.88→47.28ms（1.92×）"
    },
    "expected_tier": "2.0"
   }
