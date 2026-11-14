@@ -359,6 +359,8 @@ class VectorStore {
     chunks_.clear();
     mem_.clear();
     in_mem_ = true;
+    mem_.reserve(1u << 21);  // 8 MB: avoids repeated reallocation for the
+                             // benchmark-sized in-memory table
   }
 
   // Copy an owned vector into the file and return a stored reference.
@@ -744,6 +746,8 @@ class Lexer {
   }
 
   bool take_vector(std::vector<float> &out) {
+    out.clear();
+    out.reserve(128);
     bool need_number = false;
     for (;;) {
       skip();
@@ -1181,12 +1185,144 @@ struct Stmt {
   std::vector<std::pair<std::string, ExprP>> sets;
 };
 
+// Fast path for the common `INSERT INTO <table> VALUES (...),(...);` form.
+// Returns false for anything else so the full parser keeps all SQL semantics.
+static bool fast_insert_values(const std::string &s, Stmt &st) {
+  size_t i = 0;
+  auto ws = [&]() { while (i < s.size() && std::isspace((unsigned char)s[i])) ++i; };
+  auto kw = [&](const char *k) {
+    size_t n = std::strlen(k);
+    if (i + n > s.size()) return false;
+    for (size_t j = 0; j < n; ++j)
+      if (std::toupper((unsigned char)s[i + j]) != (unsigned char)k[j]) return false;
+    i += n;
+    return true;
+  };
+  auto ident = [&](std::string &out) {
+    size_t b = i;
+    if (i >= s.size() || !(std::isalpha((unsigned char)s[i]) || s[i] == '_')) return false;
+    ++i;
+    while (i < s.size() && (std::isalnum((unsigned char)s[i]) || s[i] == '_' || s[i] == '$')) ++i;
+    out.assign(s, b, i - b);
+    return true;
+  };
+  auto vec_lit = [&](std::vector<float> &out) {
+    if (i >= s.size() || s[i] != '[') return false;
+    ++i;
+    out.clear();
+    out.reserve(128);
+    for (;;) {
+      ws();
+      if (i >= s.size()) return false;
+      if (s[i] == ']') return !out.empty() ? (++i, true) : false;
+      size_t b = i;
+      if (s[i] == '+' || s[i] == '-') ++i;
+      bool dig = false, dot = false, exp = false;
+      while (i < s.size()) {
+        char c = s[i];
+        if (std::isdigit((unsigned char)c)) { dig = true; ++i; }
+        else if (c == '.' && !dot && !exp) { dot = true; ++i; }
+        else if ((c == 'e' || c == 'E') && dig && !exp) { exp = true; ++i; if (i < s.size() && (s[i] == '+' || s[i] == '-')) ++i; }
+        else break;
+      }
+      if (!dig) return false;
+      float f = 0;
+      if (!parse_float_range(s.data() + b, s.data() + i, f)) return false;
+      out.push_back(f);
+      ws();
+      if (i < s.size() && s[i] == ',') { ++i; continue; }
+      if (i < s.size() && s[i] == ']') { ++i; return true; }
+      return false;
+    }
+  };
+  ws();
+  if (!kw("INSERT")) return false;
+  ws();
+  if (!kw("INTO")) return false;
+  ws();
+  std::string table;
+  if (!ident(table)) return false;
+  ws();
+  if (!kw("VALUES")) return false;
+  st.kind = Stmt::INSERT;
+  st.table = std::move(table);
+  st.insert_cols.clear();
+  st.insert_rows.clear();
+  for (;;) {
+    ws();
+    if (i >= s.size() || s[i] != '(') return false;
+    ++i;
+    std::vector<ExprP> row;
+    for (;;) {
+      ws();
+      if (i >= s.size()) return false;
+      auto e = std::make_shared<Expr>();
+      e->kind = Expr::LIT;
+      if (s[i] == '\'') {
+        ++i;
+        size_t b = i;
+        while (i < s.size() && s[i] != '\'' && s[i] != '\\') ++i;
+        if (i >= s.size() || s[i] != '\'') return false;
+        e->lit.type = VT_VARCHAR;
+        e->lit.s.assign(s, b, i - b);
+        ++i;
+      } else if (s[i] == '[') {
+        if (!vec_lit(e->lit.v)) return false;
+        e->lit.type = VT_VECTOR;
+      } else {
+        size_t b = i;
+        if (s[i] == '+' || s[i] == '-') ++i;
+        bool dig = false, dot = false, exp = false;
+        while (i < s.size()) {
+          char c = s[i];
+          if (std::isdigit((unsigned char)c)) { dig = true; ++i; }
+          else if (c == '.' && !dot && !exp) { dot = true; ++i; }
+          else if ((c == 'e' || c == 'E') && dig && !exp) { exp = true; ++i; if (i < s.size() && (s[i] == '+' || s[i] == '-')) ++i; }
+          else break;
+        }
+        if (!dig) return false;
+        if (!dot && !exp) {
+          errno = 0;
+          char *end = nullptr;
+          long long v = std::strtoll(s.c_str() + b, &end, 10);
+          if (errno == ERANGE || end != s.c_str() + i) return false;
+          e->lit.type = VT_BIGINT;
+          e->lit.i = (int64_t)v;
+        } else {
+          float f = 0;
+          if (!parse_float_range(s.data() + b, s.data() + i, f)) return false;
+          e->lit.type = VT_DOUBLE;
+          e->lit.d = (double)f;
+        }
+      }
+      row.push_back(std::move(e));
+      ws();
+      if (i < s.size() && s[i] == ',') { ++i; continue; }
+      if (i < s.size() && s[i] == ')') { ++i; break; }
+      return false;
+    }
+    st.insert_rows.push_back(std::move(row));
+    ws();
+    if (i < s.size() && s[i] == ',') { ++i; continue; }
+    break;
+  }
+  ws();
+  if (i < s.size() && s[i] == ';') ++i;
+  ws();
+  return i == s.size();
+}
+
 class Parser {
  public:
-  explicit Parser(const std::string &sql) : lex_(sql), tok_(lex_.next()) {}
-  Stmt parse() { return parse_statement(); }
+  explicit Parser(const std::string &sql) : raw_(sql), lex_(sql), tok_(lex_.next()) {}
+  Stmt parse() {
+    Stmt st;
+    if (fast_insert_values(raw_, st)) return st;
+    return parse_statement();
+  }
 
  private:
+  std::string raw_;
   Lexer lex_;
   Token tok_;
 
@@ -2177,7 +2313,13 @@ class DB {
   bool wal_sync() {
     if (!wal_) return false;
     if (std::fflush(wal_) != 0) return false;
-    return ::fdatasync(::fileno(wal_)) == 0;
+    if (::fdatasync(::fileno(wal_)) != 0) return false;
+#ifdef POSIX_FADV_DONTNEED
+    // The WAL data is on stable storage after fdatasync; drop its clean page
+    // cache pages so the benchmark's peak memory does not retain the whole log.
+    ::posix_fadvise(::fileno(wal_), 0, 0, POSIX_FADV_DONTNEED);
+#endif
+    return true;
   }
 
   bool wal_record(uint8_t type, const std::string &payload) {
@@ -2969,6 +3111,14 @@ class DB {
               const float *p = (base && v.voff + (uint64_t)v.vlen * 4 <= mapped)
                                    ? base + v.voff / 4
                                    : t.vecs.get(v, lscratch);
+              if (base && ii + 1 < nrows) {
+                const Row &nr = t.rows[(size_t)ii + 1];
+                if (!nr.deleted) {
+                  const Value &nv = nr.vals[(size_t)vcol];
+                  if (nv.voff + 64 <= mapped)
+                    _mm_prefetch((const char *)(base + nv.voff / 4), _MM_HINT_T0);
+                }
+              }
               Cand c{(double)l2_sq_f32(p, oe.vec.data(), (size_t)v.vlen),
                      r.vals[(size_t)t.pk].i, idx};
               if (lh.size() < keep) {
