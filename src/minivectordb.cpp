@@ -3190,6 +3190,7 @@ class DB {
     }
     if (!can_quant || !std::isfinite(maxabs)) return;
     const double scale = maxabs > 0.0 ? maxabs / 63.0 : 1.0;
+    const double inverse_scale = 1.0 / scale;
     if (count * dim > t.quant_codes.capacity())
       std::vector<int8_t>(count * dim).swap(t.quant_codes);
     else
@@ -3204,7 +3205,8 @@ class DB {
       int norm = 0, sum = 0;
       double error2 = 0.0;
       for (size_t j = 0; j < dim; ++j) {
-        int c = (int)std::round((double)p[j] / scale);
+        const double scaled = (double)p[j] * inverse_scale;
+        int c = (int)(scaled + std::copysign(0.5, scaled));
         c = std::max(-63, std::min(63, c));
         t.quant_codes[i * dim + j] = (int8_t)c;
         norm += c * c;
@@ -3350,6 +3352,7 @@ class DB {
         if (quantized) {
           query_codes.resize(dim);
           const double scale = t.quant_scale;
+          const double inverse_scale = 1.0 / scale;
           double error2 = 0.0, maxabs = 0.0;
           for (size_t j = 0; j < dim; ++j) {
             const double x = (double)oe.vec[j];
@@ -3358,7 +3361,9 @@ class DB {
               quantized = false;
               break;
             }
-            const int c = std::max(-63, std::min(63, (int)std::round(x / scale)));
+            const double scaled = x * inverse_scale;
+            const int c = std::max(-63, std::min(63,
+                (int)(scaled + std::copysign(0.5, scaled))));
             query_codes[j] = (uint8_t)(c + 63);
             query_norm += c * c;
             const double e = x - c * scale;

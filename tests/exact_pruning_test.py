@@ -139,7 +139,31 @@ def scale_cases():
             db.close()
 
 
+def quantization_boundary_cases():
+    levels = [-63.0, 0.0, 63.0]
+    for center in [-62.5, -1.5, -0.5, 0.5, 1.5, 62.5]:
+        levels.extend(center + delta for delta in [-2.0 ** -16, 0.0, 2.0 ** -16])
+    for dim in [17, 128]:
+        for scale in [2.0 ** -145, 1.0, 1.1, 2.0 ** 120]:
+            rows = [(10000 - index, index % 10,
+                     [scale * levels[(index * 17 + coord * 13) % len(levels)]
+                      for coord in range(dim)]) for index in range(512)]
+            db = Database()
+            try:
+                db.sql("CREATE TABLE t(id BIGINT PRIMARY KEY, grp BIGINT, v VECTOR(%d))" % dim)
+                insert(db, rows)
+                queries = [[0.0] * dim, rows[7][2],
+                           [scale * (0.5 + 2.0 ** -16)] * dim,
+                           [-scale * (0.5 + 2.0 ** -16)] * dim]
+                for query in queries:
+                    for group in [None, 7]:
+                        check(db, query, len(rows), group)
+            finally:
+                db.close()
+
+
 if __name__ == "__main__":
     integer_and_mutation_cases()
     scale_cases()
+    quantization_boundary_cases()
     print("PASS exact_pruning_test: exact TopK, ties, float scales, cache invalidation")
