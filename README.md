@@ -119,6 +119,9 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
   the current TopK radius. Surviving candidates use the original float32
   distance kernel, with primary key ascending for ties. Out-of-range queries,
   large tables and unsupported query shapes retain the exhaustive scan.
+  For 128D, coordinates are interleaved in blocks of eight rows, with equal
+  BIGINT filter groups stored together. AVX2 evaluates eight conservative
+  rejection bounds at once; other predicates gather individual row codes.
   `CREATE VECTOR INDEX` is accepted; searches always preserve exact results.
 - **Transactions:** at most one explicit transaction. Changes are applied
   immediately and an undo log restores the previous state on `ROLLBACK`.
@@ -193,6 +196,8 @@ restarts and records peak RSS.
 durable transactions and exact searches against an independent integer
 oracle, and verifies recovery after killing the process. It defaults to data
 directories on the repository's filesystem, because `/tmp` may be tmpfs.
+The default ties duplicate random vectors; `--ties zeros` reproduces the older
+benchmark's zero-vector cluster. Compare both binaries with the same option.
 
 ```bash
 python3 tests/performance_bench.py --binary /path/to/baseline \

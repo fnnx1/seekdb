@@ -191,6 +191,41 @@ static int quant_dot_avx2(const int8_t *a, const uint8_t *b, size_t n) {
 }
 #endif
 
+#if defined(__x86_64__)
+// Each 32-byte stripe contains four coordinates from eight rows. A SIMD
+// lane accumulates one whole row, avoiding a horizontal reduction per row.
+// bias = norm(row_code) + 126 * sum(row_code), because query codes are
+// shifted by +63 for the unsigned/signed maddubs instruction.
+__attribute__((target("avx2"))) static unsigned quant_mask8_128(
+    const int8_t* a, const uint8_t* q, const int* bias, int norm, int limit,
+    int* distances) {
+  __m256i sum0 = _mm256_setzero_si256(), sum1 = sum0;
+  const __m256i one = _mm256_set1_epi16(1);
+  for (size_t j = 0; j < 128; j += 8) {
+    int qb0, qb1;
+    std::memcpy(&qb0, q + j, 4);
+    std::memcpy(&qb1, q + j + 4, 4);
+    __m256i p0 =
+        _mm256_maddubs_epi16(_mm256_set1_epi32(qb0),
+                             _mm256_loadu_si256((const __m256i*)(a + j * 8)));
+    __m256i p1 = _mm256_maddubs_epi16(
+        _mm256_set1_epi32(qb1),
+        _mm256_loadu_si256((const __m256i*)(a + (j + 4) * 8)));
+    sum0 = _mm256_add_epi32(sum0, _mm256_madd_epi16(p0, one));
+    sum1 = _mm256_add_epi32(sum1, _mm256_madd_epi16(p1, one));
+  }
+  __m256i dot = _mm256_add_epi32(sum0, sum1);
+  __m256i dist = _mm256_sub_epi32(
+      _mm256_add_epi32(_mm256_loadu_si256((const __m256i*)bias),
+                       _mm256_set1_epi32(norm)),
+      _mm256_add_epi32(dot, dot));
+  _mm256_storeu_si256((__m256i*)distances, dist);
+  const unsigned rejected = (unsigned)_mm256_movemask_ps(
+      _mm256_castsi256_ps(_mm256_cmpgt_epi32(dist, _mm256_set1_epi32(limit))));
+  return (~rejected) & 0xffu;
+}
+#endif
+
 static int quant_dot(const int8_t *a, const uint8_t *b, size_t n) {
 #if defined(__x86_64__)
   static const bool avx2 = [] {
@@ -202,6 +237,17 @@ static int quant_dot(const int8_t *a, const uint8_t *b, size_t n) {
   int out = 0;
   for (size_t j = 0; j < n; ++j) out += (int)a[j] * (int)b[j];
   return out;
+}
+
+// A short boundary or a different predicate may need one row rather than a
+// full block. Gather its four-coordinate stripes back into a small scratch
+// buffer; the common eight-row scan never takes this path.
+static int quant_dot_lane128(const int8_t* codes, size_t position,
+                             const uint8_t* query) {
+  alignas(32) int8_t row[128];
+  const int8_t* block = codes + (position / 8) * 1024 + (position % 8) * 4;
+  for (size_t j = 0; j < 128; j += 4) std::memcpy(row + j, block + j * 8, 4);
+  return quant_dot(row, query, 128);
 }
 
 // Fast decimal float parser for vector literals.  The tokenizer has already
@@ -691,6 +737,10 @@ struct Table {
   uint64_t scan_ver = ~0ull;
   int scan_col = -1;
   double quant_scale = 0.0;
+  double quant_error_max = 0.0;
+  std::vector<int> quant_bias;
+  std::vector<uint32_t> quant_order, quant_rank;
+  int quant_group = -1;
 };
 
 static std::string fmt_double(double d) {
@@ -770,7 +820,53 @@ static bool parse_vector_string(const std::string &text, std::vector<float> &out
     const char *number = p;
     if (*number == '+') ++number;
     double d = 0.0;
-    auto parsed = std::from_chars(number, end, d, std::chars_format::general);
+    // Both operands of this division are exact double integers (< 2^53),
+    // so hardware division rounds a short decimal exactly as strtod does.
+    // Long mantissas, exponents and uncommon syntax keep the general parser.
+    const char* decimal = number;
+    bool negative = decimal < end && *decimal == '-';
+    if (negative) ++decimal;
+    uint64_t mantissa = 0;
+    unsigned digits = 0, places = 0;
+    while (decimal < end && *decimal >= '0' && *decimal <= '9' && digits < 15) {
+      mantissa = mantissa * 10 + (*decimal++ - '0');
+      ++digits;
+    }
+    if (decimal < end && *decimal == '.') {
+      ++decimal;
+      while (decimal < end && *decimal >= '0' && *decimal <= '9' &&
+             digits < 15) {
+        mantissa = mantissa * 10 + (*decimal++ - '0');
+        ++digits;
+        ++places;
+      }
+    }
+    std::from_chars_result parsed;
+    static const double powers[] = {1,
+                                    10,
+                                    100,
+                                    1000,
+                                    10000,
+                                    100000,
+                                    1000000,
+                                    10000000,
+                                    100000000,
+                                    1000000000,
+                                    10000000000,
+                                    100000000000,
+                                    1000000000000,
+                                    10000000000000,
+                                    100000000000000,
+                                    1000000000000000};
+    if (digits &&
+        (decimal == end ||
+         (*decimal != 'e' && *decimal != 'E' && *decimal != 'x' &&
+          *decimal != 'X' && !std::isdigit((unsigned char)*decimal)))) {
+      d = (double)mantissa / powers[places];
+      if (negative) d = -d;
+      parsed = {decimal, std::errc{}};
+    } else
+      parsed = std::from_chars(number, end, d, std::chars_format::general);
     const char *next = parsed.ptr;
     if (number == end || (*p == '+' && (*number == '+' || *number == '-')) ||
         parsed.ec != std::errc{} || next == number ||
@@ -864,6 +960,15 @@ class Lexer {
     if (c == '\'' || c == '"' || c == '`') {
       char q = c;
       ++i_;
+      size_t end_quote = s_.find(q, i_);
+      if (end_quote != std::string::npos &&
+          (q == '`' || s_.find('\\', i_) >= end_quote) &&
+          (end_quote + 1 >= s_.size() || s_[end_quote + 1] != q)) {
+        Token out{q == '`' ? Token::IDENT : Token::STRING,
+                  s_.substr(i_, end_quote - i_)};
+        i_ = end_quote + 1;
+        return out;
+      }
       std::string out;
       while (i_ < s_.size()) {
         char x = s_[i_++];
@@ -1479,7 +1584,7 @@ class Parser {
   }
 
  private:
-  std::string raw_;
+  const std::string& raw_;
   Lexer lex_;
   Token tok_;
 
@@ -3145,6 +3250,11 @@ class DB {
     t.quant_rows.clear();
     t.quant_codes.clear();
     t.quant_scale = 0.0;
+    t.quant_error_max = 0.0;
+    t.quant_bias.clear();
+    t.quant_order.clear();
+    t.quant_rank.clear();
+    t.quant_group = -1;
     t.scan_ver = t.version;
     t.scan_col = vcol;
     const size_t count = t.rows.size();
@@ -3154,25 +3264,44 @@ class DB {
       std::vector<Table::ScanRow>().swap(t.scan_rows);
       std::vector<Table::QuantRow>().swap(t.quant_rows);
       std::vector<int8_t>().swap(t.quant_codes);
+      std::vector<int>().swap(t.quant_bias);
+      std::vector<uint32_t>().swap(t.quant_order);
+      std::vector<uint32_t>().swap(t.quant_rank);
       return;
     }
-    const bool can_quant = count >= 512 && dim >= 16 && dim <= 4096 &&
-        count <= budget / (dim + sizeof(Table::ScanRow) + sizeof(Table::QuantRow));
+    const size_t padded_count = dim == 128 ? (count + 7) / 8 * 8 : count;
+    const size_t extra_per_row = dim == 128 ? 3 * sizeof(uint32_t) : 0;
+    const bool can_quant =
+        count >= 512 && dim >= 16 && dim <= 4096 &&
+        padded_count <= budget / (dim + sizeof(Table::ScanRow) +
+                                  sizeof(Table::QuantRow) + extra_per_row);
     if (!can_quant) {
       std::vector<Table::QuantRow>().swap(t.quant_rows);
       std::vector<int8_t>().swap(t.quant_codes);
+      std::vector<int>().swap(t.quant_bias);
+      std::vector<uint32_t>().swap(t.quant_order);
+      std::vector<uint32_t>().swap(t.quant_rank);
     }
     // Account for retained allocation capacity after mutations.  Do not let
     // vector growth double a derived cache beyond its total memory budget.
     size_t planned = std::max(count, t.scan_rows.capacity()) * sizeof(Table::ScanRow);
     if (can_quant) {
       planned += std::max(count, t.quant_rows.capacity()) * sizeof(Table::QuantRow);
-      planned += std::max(count * dim, t.quant_codes.capacity());
+      planned += std::max(padded_count * dim, t.quant_codes.capacity());
+      if (dim == 128) {
+        planned +=
+            std::max(padded_count, t.quant_bias.capacity()) * sizeof(int);
+        planned += std::max(count, t.quant_order.capacity()) * sizeof(uint32_t);
+        planned += std::max(count, t.quant_rank.capacity()) * sizeof(uint32_t);
+      }
     }
     if (planned > budget) {
       std::vector<Table::ScanRow>().swap(t.scan_rows);
       std::vector<Table::QuantRow>().swap(t.quant_rows);
       std::vector<int8_t>().swap(t.quant_codes);
+      std::vector<int>().swap(t.quant_bias);
+      std::vector<uint32_t>().swap(t.quant_order);
+      std::vector<uint32_t>().swap(t.quant_rank);
     }
     if (count > t.scan_rows.capacity())
       std::vector<Table::ScanRow>(count).swap(t.scan_rows);
@@ -3201,14 +3330,43 @@ class DB {
     if (!can_quant || !std::isfinite(maxabs)) return;
     const double scale = maxabs > 0.0 ? maxabs / 63.0 : 1.0;
     const double inverse_scale = 1.0 / scale;
-    if (count * dim > t.quant_codes.capacity())
-      std::vector<int8_t>(count * dim).swap(t.quant_codes);
+    if (padded_count * dim > t.quant_codes.capacity())
+      std::vector<int8_t>(padded_count * dim).swap(t.quant_codes);
     else
-      t.quant_codes.resize(count * dim);
+      t.quant_codes.resize(padded_count * dim);
     if (count > t.quant_rows.capacity())
       std::vector<Table::QuantRow>(count).swap(t.quant_rows);
     else
       t.quant_rows.resize(count);
+    if (dim == 128) {
+      if (padded_count > t.quant_bias.capacity())
+        std::vector<int>(padded_count).swap(t.quant_bias);
+      else
+        t.quant_bias.resize(padded_count);
+      t.quant_group = -1;
+      for (size_t ci = 0; ci < t.cols.size(); ++ci)
+        if ((int)ci != t.pk && t.cols[ci].type == VT_BIGINT) {
+          t.quant_group = (int)ci;
+          break;
+        }
+      if (count > t.quant_order.capacity())
+        std::vector<uint32_t>(count).swap(t.quant_order);
+      else
+        t.quant_order.resize(count);
+      if (count > t.quant_rank.capacity())
+        std::vector<uint32_t>(count).swap(t.quant_rank);
+      else
+        t.quant_rank.resize(count);
+      for (size_t i = 0; i < count; ++i) t.quant_order[i] = i;
+      if (t.quant_group >= 0)
+        std::stable_sort(t.quant_order.begin(), t.quant_order.end(),
+                         [&](size_t a, size_t b) {
+                           return t.rows[a].vals[t.quant_group].i <
+                                  t.rows[b].vals[t.quant_group].i;
+                         });
+      for (size_t position = 0; position < count; ++position)
+        t.quant_rank[t.quant_order[position]] = (uint32_t)position;
+    }
     for (size_t i = 0; i < count; ++i) {
       if (t.scan_rows[i].off == UINT64_MAX) continue;
       const float *p = t.vecs.get(t.rows[i].vals[(size_t)vcol], scratch);
@@ -3218,7 +3376,13 @@ class DB {
         const double scaled = (double)p[j] * inverse_scale;
         int c = (int)(scaled + std::copysign(0.5, scaled));
         c = std::max(-63, std::min(63, c));
-        t.quant_codes[i * dim + j] = (int8_t)c;
+        size_t offset = i * dim + j;
+        if (dim == 128) {
+          const size_t position = t.quant_rank[i];
+          offset =
+              (position / 8) * 1024 + (j / 4) * 32 + (position % 8) * 4 + j % 4;
+        }
+        t.quant_codes[offset] = (int8_t)c;
         norm += c * c;
         sum += c;
         double error = (double)p[j] - c * scale;
@@ -3228,6 +3392,8 @@ class DB {
       // code and its error radius.  This is tiny relative to quantization.
       double error = std::sqrt(error2) + maxabs * std::sqrt((double)dim) * 1e-12;
       t.quant_rows[i] = {norm, sum, error};
+      t.quant_error_max = std::max(t.quant_error_max, error);
+      if (dim == 128) t.quant_bias[t.quant_rank[i]] = norm + 126 * sum;
     }
     t.quant_scale = scale;
   }
@@ -3388,52 +3554,61 @@ class DB {
         // kernel, including subnormal products.  Equality always survives.
         const double fp_margin = 4.0 * FLT_EPSILON * (double)(dim + 8);
         const double tiny_margin = 4.0 * std::sqrt((double)dim * FLT_MIN);
-        auto radius = [&](double d) {
-          return std::sqrt(d) * (1.0 + fp_margin) + tiny_margin + query_error;
+        // Use the largest reconstruction error in the cache so one integer
+        // threshold works for all eight lanes. Round upward: equal distances
+        // and candidates whose primary keys can break a tie must survive.
+        auto quantized_limit = [&](double d) {
+          const double r = std::sqrt(d) * (1.0 + fp_margin) + tiny_margin +
+                           query_error + t.quant_error_max;
+          const double limit = std::nextafter(
+              r * r / scale2, std::numeric_limits<double>::infinity());
+          return !std::isfinite(limit) || limit >= INT32_MAX
+                     ? INT32_MAX
+                     : (int)std::ceil(limit);
         };
         static thread_local std::vector<Cand> selected;
         selected.clear();
         selected.reserve(use_heap ? keep : total);
-        auto evaluate = [&](const float *vector_data, int64_t pk, size_t idx,
-                            std::vector<Cand> &out, double &threshold_radius) {
+        auto evaluate = [&](const float* vector_data, int64_t pk, size_t idx,
+                            std::vector<Cand>& out, int& code_limit) {
           Cand candidate{(double)l2_sq_f32(vector_data, oe.vec.data(), dim), pk, idx};
           if (!use_heap) {
             out.push_back(candidate);
           } else if (out.size() < keep) {
             out.push_back(candidate);
             std::push_heap(out.begin(), out.end(), cmp);
-            if (out.size() == keep && quantized) threshold_radius = radius(out.front().d);
+            if (out.size() == keep && quantized)
+              code_limit = quantized_limit(out.front().d);
           } else if (cmp(candidate, out.front())) {
             std::pop_heap(out.begin(), out.end(), cmp);
             out.back() = candidate;
             std::push_heap(out.begin(), out.end(), cmp);
-            if (quantized) threshold_radius = radius(out.front().d);
+            if (quantized) code_limit = quantized_limit(out.front().d);
           }
         };
         struct Pending {
           const float *vector_data;
           int64_t pk;
           size_t idx;
-          double quant_d;
+          int quant_d;
         };
         struct ScanState {
           std::vector<float> scratch;
           Pending pending[4];
           size_t count = 0;
         };
-        auto flush_pending = [&](ScanState &state, std::vector<Cand> &out,
-                                 double &threshold_radius) {
+        auto flush_pending = [&](ScanState& state, std::vector<Cand>& out,
+                                 int& code_limit) {
           for (size_t index = 0; index < state.count; ++index) {
             const Pending &candidate = state.pending[index];
-            const double bound = threshold_radius + t.quant_rows[candidate.idx].error;
-            if (candidate.quant_d > bound * bound) continue;
-            evaluate(candidate.vector_data, candidate.pk, candidate.idx,
-                     out, threshold_radius);
+            if (candidate.quant_d > code_limit) continue;
+            evaluate(candidate.vector_data, candidate.pk, candidate.idx, out,
+                     code_limit);
           }
           state.count = 0;
         };
-        auto scan_one = [&](size_t idx, std::vector<Cand> &out,
-                            double &threshold_radius, ScanState &state) {
+        auto scan_one = [&](size_t idx, std::vector<Cand>& out, int& code_limit,
+                            ScanState& state, int known_distance = -1) {
           uint64_t off;
           int64_t pk;
           if (compact) {
@@ -3448,16 +3623,23 @@ class DB {
             off = v.voff;
             pk = r.vals[(size_t)t.pk].i;
           }
-          const bool defer = quantized && out.size() == keep &&
-                             std::isfinite(threshold_radius);
-          double quant_d = 0.0;
+          const bool defer = quantized && out.size() == keep;
+          int quant_d = 0;
           if (defer) {
             const auto &qr = t.quant_rows[idx];
-            const int dot = quant_dot(t.quant_codes.data() + idx * dim,
-                                      query_code_data, dim) - 63 * qr.sum;
-            quant_d = (qr.norm + query_norm - 2 * dot) * scale2;
-            const double bound = threshold_radius + qr.error;
-            if (quant_d > bound * bound) return;
+            if (known_distance >= 0)
+              quant_d = known_distance;
+            else {
+              const int dot =
+                  (dim == 128
+                       ? quant_dot_lane128(t.quant_codes.data(),
+                                           t.quant_rank[idx], query_code_data)
+                       : quant_dot(t.quant_codes.data() + idx * dim,
+                                   query_code_data, dim)) -
+                  63 * qr.sum;
+              quant_d = qr.norm + query_norm - 2 * dot;
+            }
+            if (quant_d > code_limit) return;
           }
           const bool mapped_vector = base && off + dim * sizeof(float) <= mapped;
           const float *vector_data = mapped_vector
@@ -3467,11 +3649,45 @@ class DB {
             for (size_t coord = 0; coord < dim; coord += 16)
               __builtin_prefetch(vector_data + coord, 0, 3);
             state.pending[state.count++] = {vector_data, pk, idx, quant_d};
-            if (state.count == 4) flush_pending(state, out, threshold_radius);
+            if (state.count == 4) flush_pending(state, out, code_limit);
           } else {
-            flush_pending(state, out, threshold_radius);
-            evaluate(vector_data, pk, idx, out, threshold_radius);
+            flush_pending(state, out, code_limit);
+            evaluate(vector_data, pk, idx, out, code_limit);
           }
+        };
+
+#if defined(__x86_64__)
+        static const bool batch_avx2 = __builtin_cpu_supports("avx2") != 0;
+#else
+        const bool batch_avx2 = false;
+#endif
+        auto scan_range = [&](size_t start, size_t end, std::vector<Cand>& out,
+                              int& code_limit, ScanState& state) {
+          size_t i = start;
+          if (quantized && dim == 128 && batch_avx2) {
+            for (; i < end && (out.size() < keep || i % 8); ++i)
+              scan_one(t.quant_order[i], out, code_limit, state);
+            for (; i + 8 <= end && out.size() == keep; i += 8) {
+              int distances[8];
+              unsigned mask = 0;
+#if defined(__x86_64__)
+              mask = quant_mask8_128(t.quant_codes.data() + i * 128,
+                                     query_code_data, t.quant_bias.data() + i,
+                                     query_norm, code_limit, distances);
+#endif
+              while (mask) {
+                unsigned r = __builtin_ctz(mask);
+                mask &= mask - 1;
+                scan_one(t.quant_order[i + r], out, code_limit, state,
+                         distances[r]);
+              }
+            }
+          }
+          for (; i < end; ++i)
+            scan_one(
+                quantized && dim == 128 && batch_avx2 ? t.quant_order[i] : i,
+                out, code_limit, state);
+          flush_pending(state, out, code_limit);
         };
 #ifdef _OPENMP
         if (no_filter && use_heap && t.rows.size() >= 2000) {
@@ -3483,12 +3699,11 @@ class DB {
             ScanState state;
             std::vector<Cand> &out = locals[tid];
             out.reserve(keep);
-            double threshold_radius = std::numeric_limits<double>::infinity();
-            const long long nrows = (long long)t.rows.size();
-            #pragma omp for schedule(static)
-            for (long long i = 0; i < nrows; ++i)
-              scan_one((size_t)i, out, threshold_radius, state);
-            flush_pending(state, out, threshold_radius);
+            int code_limit = INT32_MAX;
+            const size_t n = t.rows.size();
+            const size_t workers = (size_t)omp_get_num_threads();
+            scan_range(n * tid / workers, n * (tid + 1) / workers, out,
+                       code_limit, state);
           }
           selected.insert(selected.end(), locals[0].begin(), locals[0].end());
           selected.insert(selected.end(), locals[1].begin(), locals[1].end());
@@ -3496,14 +3711,19 @@ class DB {
 #endif
         {
           ScanState state;
-          double threshold_radius = std::numeric_limits<double>::infinity();
+          int code_limit = INT32_MAX;
           if (no_filter) {
-            for (size_t i = 0; i < t.rows.size(); ++i)
-              scan_one(i, selected, threshold_radius, state);
+            scan_range(0, t.rows.size(), selected, code_limit, state);
+          } else if (quantized && dim == 128 && batch_avx2 && fast_col >= 0 &&
+                     fast_val.type == VT_BIGINT && fast_col == t.quant_group &&
+                     !matches.empty()) {
+            scan_range(t.quant_rank[matches.front()],
+                       t.quant_rank[matches.back()] + 1, selected, code_limit,
+                       state);
           } else {
-            for (size_t i : matches) scan_one(i, selected, threshold_radius, state);
+            for (size_t i : matches) scan_one(i, selected, code_limit, state);
           }
-          flush_pending(state, selected, threshold_radius);
+          flush_pending(state, selected, code_limit);
         }
         if (keep < selected.size()) {
           std::nth_element(selected.begin(), selected.begin() + (std::ptrdiff_t)keep,

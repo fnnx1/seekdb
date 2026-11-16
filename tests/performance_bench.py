@@ -99,10 +99,12 @@ def prepare(args, directory):
     rng.shuffle(ids)  # PK ordering must not depend on insertion order.
     rows = [(pk, pk % args.groups,
              [rng.randrange(-64, 64) for _ in range(args.dims)]) for pk in ids]
-    # Identical vectors deliberately exercise (distance, PK) tie handling.
+    # Identical random vectors exercise ties without putting an artificial
+    # cluster at the center of every random query's nearest-neighbor set.
+    # Keep the historical zero cluster available for comparable old reports.
     for i in range(min(20, len(rows))):
         pk, group, _ = rows[i]
-        rows[i] = (pk, group, [0] * args.dims)
+        rows[i] = (pk, group, [0] * args.dims if args.ties == "zeros" else rows[0][2][:])
     queries = [(i % args.groups if i < args.queries // 2 else -1,
                 [rng.randrange(-64, 64) for _ in range(args.dims)])
                for i in range(args.queries)]
@@ -291,6 +293,8 @@ def main():
     parser.add_argument("--groups", type=int, default=10)
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--seed", type=int, default=20261114)
+    parser.add_argument("--ties", choices=("copies", "zeros"), default="copies",
+                        help="duplicate random vectors (default) or the historical zero cluster")
     parser.add_argument("--cpus", help="comma-separated engine CPU affinity; default first two allowed CPUs")
     parser.add_argument("--json", type=Path, help="save all raw rounds and medians")
     parser.add_argument("--data-parent", type=Path, default=ROOT,
@@ -319,6 +323,7 @@ def main():
                                    batch=args.batch, commits=(args.rows + args.batch - 1)//args.batch,
                                    groups=args.groups, k=args.k, seed=args.seed,
                                    engine_cpus=sorted(args.cpus), dataset="random-dyadic-float32",
+                                   tied_vectors=args.ties,
                                    data_parent=str(args.data_parent.resolve()),
                                    data_filesystem=subprocess.check_output(
                                        ["stat", "-f", "-c", "%T", str(args.data_parent)], text=True).strip(),

@@ -43,6 +43,12 @@ g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
     -o "$SAN_BIN" tests/quant_dot_test.cpp
 ASAN_OPTIONS=detect_leaks=1 "$SAN_BIN"
 
+echo "== ASan/UBSan SIMD lanes and decimal parser =="
+g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -o "$SAN_BIN" tests/search_kernel_test.cpp
+ASAN_OPTIONS=detect_leaks=1 "$SAN_BIN"
+
 echo "== ASan/UBSan compact cell ownership and snapshot tests =="
 g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
     -fsanitize=address,undefined -fno-omit-frame-pointer \

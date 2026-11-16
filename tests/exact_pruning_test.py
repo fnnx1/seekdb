@@ -183,9 +183,63 @@ def survivor_batch_cases():
             db.close()
 
 
+def grouped_layout_cases():
+    rng = random.Random(185)
+    count, dim = 2053, 128
+    ids = list(range(count))
+    rng.shuffle(ids)
+    vectors = {pk: [rng.randrange(-4, 5) for _ in range(dim)] for pk in ids}
+    db = Database()
+    try:
+        db.sql("CREATE TABLE t(id BIGINT PRIMARY KEY, grp BIGINT, other BIGINT, v VECTOR(128))")
+        for start in range(0, count, 100):
+            db.sql("INSERT INTO t VALUES " + ",".join(
+                "(%d,%d,%d,%s)" % (pk, pk % 7 - 3, pk % 11, literal(vectors[pk]))
+                for pk in ids[start:start + 100]))
+        query = literal([1] * dim)
+
+        def verify(predicate):
+            sql = "SELECT id FROM t WHERE %s ORDER BY L2_DISTANCE(v,%s)" % (predicate, query)
+            full = db.sql(sql + " LIMIT %d" % count)
+            assert db.sql(sql + " LIMIT 17") == full[:17]
+
+        # The first BIGINT filter uses contiguous blocks; the other predicates
+        # gather individual lanes from the same transposed coordinate cache.
+        for predicate in ["grp=-2", "-2=grp", "other=4", "grp>=0 AND other<>3", "id=9"]:
+            verify(predicate)
+        db.sql("BEGIN")
+        db.sql("UPDATE t SET grp=-2,other=4 WHERE id<150")
+        db.sql("DELETE FROM t WHERE grp=0")
+        verify("grp=-2")
+        verify("other=4")
+        db.sql("ROLLBACK")
+        verify("grp=-2")
+        db.sql("DELETE FROM t")
+        assert db.sql("SELECT id FROM t ORDER BY L2_DISTANCE(v,%s) LIMIT 10" % query) == []
+        verify("grp=-2")
+    finally:
+        db.close()
+
+    # With no grouping column, both fast_col and quant_group can be -1.
+    # A general predicate must still scan only its individual matches.
+    db = Database()
+    try:
+        db.sql("CREATE TABLE t(id BIGINT PRIMARY KEY,v VECTOR(128))")
+        for start in range(0, 513, 100):
+            db.sql("INSERT INTO t VALUES " + ",".join(
+                "(%d,%s)" % (pk, literal([pk - 200] * dim))
+                for pk in range(start, min(start + 100, 513))))
+        sql = "SELECT id FROM t WHERE id<100 OR id>400 ORDER BY L2_DISTANCE(v,%s)" % query
+        full = db.sql(sql + " LIMIT 513")
+        assert db.sql(sql + " LIMIT 17") == full[:17]
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     integer_and_mutation_cases()
     scale_cases()
     quantization_boundary_cases()
     survivor_batch_cases()
+    grouped_layout_cases()
     print("PASS exact_pruning_test: exact TopK, ties, float scales, cache invalidation, survivor batches")
