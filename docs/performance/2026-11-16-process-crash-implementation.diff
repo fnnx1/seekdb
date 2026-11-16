@@ -1,0 +1,34 @@
+--- a/src/minivectordb.cpp
++++ b/src/minivectordb.cpp
+@@ -2192,7 +2192,10 @@
+ 
+ class DB {
+  public:
+-  DB() = default;
++  DB() {
++    const char *mode = std::getenv("MVDB_SYNC_COMMIT");
++    sync_commit_ = mode && std::strcmp(mode, "1") == 0;
++  }
+   ~DB() { close(); }
+ 
+   bool open(const std::string &dir, std::string &err) {
+@@ -2362,6 +2365,7 @@
+   FILE *wal_ = nullptr;
+   uint64_t wal_alignment_ = 0;
+   bool wal_failed_ = false;
++  bool sync_commit_ = false;
+ 
+   static std::string ok(int64_t n) {
+     if (n == 1) return "Query OK, 1 row affected";
+@@ -2648,7 +2652,11 @@
+ 
+   bool wal_sync() {
+     if (!wal_ || wal_failed_) return false;
++    // Acknowledged commits must survive process termination: drain all libc
++    // buffers into the kernel before replying. Power-loss synchronization is
++    // optional because the default failure model leaves the kernel running.
+     if (std::fflush(wal_) != 0) return wal_failure();
++    if (!sync_commit_) return true;
+     if (::fdatasync(::fileno(wal_)) != 0) return wal_failure();
+ #ifdef POSIX_FADV_DONTNEED
+     // Drop durable full pages while retaining the append page.  Discarding

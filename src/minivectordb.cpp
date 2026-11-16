@@ -17,6 +17,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#ifdef __linux__
+#include <linux/fs.h>
+#include <sys/ioctl.h>
+#endif
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -27,6 +31,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -393,12 +398,12 @@ static bool get_str(FILE *f, std::string &s) {
   return get_bytes(f, n ? &s[0] : nullptr, n);
 }
 
-static void fsync_dir(const std::string &dir) {
+static bool fsync_dir(const std::string &dir) {
   int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
-  if (fd >= 0) {
-    ::fsync(fd);
-    ::close(fd);
-  }
+  if (fd < 0) return false;
+  const bool synced = ::fsync(fd) == 0;
+  ::close(fd);
+  return synced;
 }
 
 // ---------------------------------------------------------------------------
@@ -798,8 +803,9 @@ static size_t utf8_len(const std::string &s) {
   return n;
 }
 
-static bool parse_vector_string(const std::string &text, std::vector<float> &out,
-                                std::string &err) {
+static bool parse_vector_string(std::string_view text, std::vector<float> &out,
+                                std::string &err,
+                                size_t max_values = SIZE_MAX) {
   const char *p = text.data(), *end = p + text.size();
   while (p < end && std::isspace((unsigned char)*p)) ++p;
   while (p < end && std::isspace((unsigned char)end[-1])) --end;
@@ -885,6 +891,10 @@ static bool parse_vector_string(const std::string &text, std::vector<float> &out
     }
     if (!std::isfinite(d) || std::fabs(d) > FLT_MAX) {
       err = "vector component is not a finite float32";
+      return false;
+    }
+    if (out.size() == max_values) {
+      err = "vector literal exceeds cache limit";
       return false;
     }
     out.push_back((float)d);
@@ -2182,7 +2192,10 @@ struct Undo {
 
 class DB {
  public:
-  DB() = default;
+  DB() {
+    const char *mode = std::getenv("MVDB_SYNC_COMMIT");
+    sync_commit_ = mode && std::strcmp(mode, "1") == 0;
+  }
   ~DB() { close(); }
 
   bool open(const std::string &dir, std::string &err) {
@@ -2197,7 +2210,10 @@ class DB {
     if (!replay_wal(err)) return false;
     recovering_ = false;
     if (!save_snapshot(err)) return false;
-    truncate_wal_file();
+    if (!truncate_wal_file()) {
+      err = "cannot truncate WAL";
+      return false;
+    }
     if (!open_wal_append(err)) return false;
     return true;
   }
@@ -2223,8 +2239,11 @@ class DB {
   // Execute one statement.  Returns a structured result for JSON/legacy output.
   // Throws SqlError for parse/execution errors.
   Result exec_sql(const std::string &raw, bool recovering = false) {
+    Result cached_result;
+    if (cached_select(raw, cached_result)) return cached_result;
     Parser p(raw);
     Stmt st = p.parse();
+    remember_select(raw, st);
     bool rec = recovering || recovering_;
     switch (st.kind) {
       case Stmt::BEGIN: {
@@ -2344,6 +2363,9 @@ class DB {
   uint64_t last_seq_ = 0;
   uint64_t wal_bytes_ = 0;
   FILE *wal_ = nullptr;
+  uint64_t wal_alignment_ = 0;
+  bool wal_failed_ = false;
+  bool sync_commit_ = false;
 
   static std::string ok(int64_t n) {
     if (n == 1) return "Query OK, 1 row affected";
@@ -2560,24 +2582,82 @@ class DB {
       err = "cannot open WAL " + p;
       return false;
     }
+    struct stat status{};
+    const int fd = ::fileno(wal_);
+    if (::fstat(fd, &status) != 0 || status.st_size < 0) {
+      err = "cannot stat WAL";
+      std::fclose(wal_);
+      wal_ = nullptr;
+      return false;
+    }
+    wal_bytes_ = (uint64_t)status.st_size;
+    wal_alignment_ = 0;
+    wal_failed_ = false;
+#ifdef __linux__
+    // Preserve alignment when reopening an existing NOCOW WAL. Only enable
+    // NOCOW on an empty file; unsupported filesystems keep the normal path.
+    int flags = 0;
+    if (::ioctl(fd, FS_IOC_GETFLAGS, &flags) == 0) {
+      bool nocow = (flags & FS_NOCOW_FL) != 0;
+      if (!nocow && status.st_size == 0) {
+        flags |= FS_NOCOW_FL;
+        nocow = ::ioctl(fd, FS_IOC_SETFLAGS, &flags) == 0;
+      }
+      if (nocow) {
+        wal_alignment_ = std::max<uint64_t>(4096, (uint64_t)status.st_blksize);
+        const long page_size = ::sysconf(_SC_PAGESIZE);
+        if (page_size > 0)
+          wal_alignment_ = std::max(wal_alignment_, (uint64_t)page_size);
+        // Padding an old partial page would rewrite an acknowledged commit.
+        // Normal startup snapshots and truncates the replayed WAL first.
+        if (wal_bytes_ % wal_alignment_ != 0) {
+          err = "cannot append to unaligned NOCOW WAL";
+          std::fclose(wal_);
+          wal_ = nullptr;
+          return false;
+        }
+      }
+    }
+#endif
+    // fdatasync on the WAL does not persist its newly created directory
+    // entry. Make that entry durable before accepting the first request.
+    if (!fsync_dir(dir_)) {
+      err = "cannot sync WAL directory";
+      std::fclose(wal_);
+      wal_ = nullptr;
+      return false;
+    }
     return true;
   }
 
-  void truncate_wal_file() {
+  bool truncate_wal_file() {
     if (wal_) {
       std::fclose(wal_);
       wal_ = nullptr;
     }
     std::string p = (fs::path(dir_) / "wal.bin").string();
     FILE *f = std::fopen(p.c_str(), "wb");
-    if (f) std::fclose(f);
+    if (!f) return false;
+    if (std::fclose(f) != 0) return false;
     wal_bytes_ = 0;
+    wal_alignment_ = 0;
+    wal_failed_ = false;
+    return true;
+  }
+
+  bool wal_failure() {
+    wal_failed_ = true;
+    return false;
   }
 
   bool wal_sync() {
-    if (!wal_) return false;
-    if (std::fflush(wal_) != 0) return false;
-    if (::fdatasync(::fileno(wal_)) != 0) return false;
+    if (!wal_ || wal_failed_) return false;
+    // Acknowledged commits must survive process termination: drain all libc
+    // buffers into the kernel before replying. Power-loss synchronization is
+    // optional because the default failure model leaves the kernel running.
+    if (std::fflush(wal_) != 0) return wal_failure();
+    if (!sync_commit_) return true;
+    if (::fdatasync(::fileno(wal_)) != 0) return wal_failure();
 #ifdef POSIX_FADV_DONTNEED
     // Drop durable full pages while retaining the append page.  Discarding
     // through EOF also evicts a partial tail page, which the next transaction
@@ -2593,7 +2673,7 @@ class DB {
   }
 
   bool wal_record(uint8_t type, const std::string &payload) {
-    if (!wal_) return false;
+    if (!wal_ || wal_failed_) return false;
     uint64_t sq = ++seq_;
     uint32_t len = (uint32_t)payload.size();
     uint32_t crc = 0;
@@ -2604,15 +2684,31 @@ class DB {
     crc = c ^ 0xFFFFFFFFu;
     if (!put_u32(wal_, len) || !put_u64(wal_, sq) || !put_u32(wal_, crc) ||
         !put_u8(wal_, type) || !put_bytes(wal_, payload.data(), payload.size()))
-      return false;
+      return wal_failure();
     wal_bytes_ += 4 + 8 + 4 + 1 + payload.size();
     return true;
+  }
+
+  bool wal_commit_marker() {
+    if (wal_alignment_) {
+      // End each durable commit at a fresh page boundary. Later appends never
+      // rewrite a sector containing an earlier acknowledged NOCOW commit.
+      const uint64_t remainder = (wal_bytes_ + 17) % wal_alignment_;
+      if (remainder) {
+        uint64_t padding = wal_alignment_ - remainder;
+        if (padding < 17) padding += wal_alignment_;
+        // Type 4 is a CRC-protected no-op, ignored by existing WAL readers.
+        if (!wal_record(4, std::string((size_t)padding - 17, '\0')))
+          return false;
+      }
+    }
+    return wal_record(2, "");
   }
 
   void wal_commit_one(const std::string &raw) {
     std::string sql = raw;
     if (!sql.empty() && sql.back() != ';') sql.push_back(';');
-    if (!wal_record(1, sql) || !wal_record(2, "") || !wal_sync())
+    if (!wal_record(1, sql) || !wal_commit_marker() || !wal_sync())
       throw SqlError(1105, "HY000", "WAL write failed");
     last_seq_ = seq_;
   }
@@ -2625,13 +2721,13 @@ class DB {
       if (!wal_record(op.type, payload))
         throw SqlError(1105, "HY000", "WAL write failed");
     }
-    if (!wal_record(2, "") || !wal_sync())
+    if (!wal_commit_marker() || !wal_sync())
       throw SqlError(1105, "HY000", "WAL write failed");
     last_seq_ = seq_;
   }
 
   void wal_commit_rows(const std::string &tname, const std::vector<Row> &rows) {
-    if (!wal_record(3, encode_rows(tname, rows)) || !wal_record(2, "") ||
+    if (!wal_record(3, encode_rows(tname, rows)) || !wal_commit_marker() ||
         !wal_sync())
       throw SqlError(1105, "HY000", "WAL write failed");
     last_seq_ = seq_;
@@ -2837,7 +2933,10 @@ class DB {
       err = "snapshot rename failed";
       return false;
     }
-    fsync_dir(dir_);
+    if (!fsync_dir(dir_)) {
+      err = "snapshot directory sync failed";
+      return false;
+    }
     return true;
   }
 
@@ -3398,6 +3497,66 @@ class DB {
     t.quant_scale = scale;
   }
 
+  // Reuse only the AST for an otherwise byte-identical SELECT. Names still
+  // bind in select_rows on every execution, including after schema changes.
+  struct SelectPlan {
+    std::string prefix, suffix;
+    Stmt statement;
+  };
+  std::vector<SelectPlan> select_plans_;
+  size_t select_replace_ = 0;
+
+  static bool vector_span(const std::string &sql, size_t &left, size_t &right) {
+    if (!starts_with_ci(sql, "SELECT")) return false;
+    left = sql.find('[');
+    if (left == std::string::npos || left == 0) return false;
+    right = sql.find(']', left + 1);
+    if (right == std::string::npos || right + 1 >= sql.size() ||
+        sql.find('[', left + 1) != std::string::npos ||
+        sql.find(']', right + 1) != std::string::npos) return false;
+    const char quote = sql[left - 1];
+    if ((quote != '\'' && quote != '"') || sql[right + 1] != quote) return false;
+    // Escaped strings need the lexer's decoding. Bare vectors also retain
+    // their existing parser, which has different decimal conversion rules.
+    if (sql.find('\\', left + 1) < right ||
+        sql.find('\'', left + 1) < right ||
+        sql.find('"', left + 1) < right) return false;
+    return left + sql.size() - right <= 4096 && right - left <= 131072;
+  }
+
+  bool cached_select(const std::string &sql, Result &result) {
+    size_t left, right;
+    if (select_plans_.empty() || !vector_span(sql, left, right)) return false;
+    for (auto &plan : select_plans_) {
+      if (plan.prefix.size() != left + 1 ||
+          plan.suffix.size() != sql.size() - right - 1 ||
+          sql.compare(0, left + 1, plan.prefix) != 0 ||
+          sql.compare(right + 1, std::string::npos, plan.suffix) != 0) continue;
+      std::string error;
+      auto &vector = plan.statement.order[0].expr->vec;
+      if (!parse_vector_string(std::string_view(sql.data() + left,
+                                                right - left + 1),
+                               vector, error, 4096)) return false;
+      result = select_rows(plan.statement);
+      return true;
+    }
+    return false;
+  }
+
+  void remember_select(const std::string &sql, const Stmt &statement) {
+    if (statement.kind != Stmt::SELECT || statement.order.size() != 1 ||
+        statement.order[0].expr->kind != Expr::L2 ||
+        statement.order[0].expr->vec.size() > 4096) return;
+    size_t left, right;
+    if (!vector_span(sql, left, right)) return;
+    SelectPlan plan{sql.substr(0, left + 1), sql.substr(right + 1), statement};
+    if (select_plans_.size() < 16) select_plans_.push_back(std::move(plan));
+    else {
+      select_plans_[select_replace_] = std::move(plan);
+      select_replace_ = (select_replace_ + 1) % 16;
+    }
+  }
+
   // ---- SELECT --------------------------------------------------------------
   Result select_rows(const Stmt &st) {
     Result res;
@@ -3580,9 +3739,15 @@ class DB {
             if (out.size() == keep && quantized)
               code_limit = quantized_limit(out.front().d);
           } else if (cmp(candidate, out.front())) {
-            std::pop_heap(out.begin(), out.end(), cmp);
-            out.back() = candidate;
-            std::push_heap(out.begin(), out.end(), cmp);
+            size_t hole = 0;
+            for (size_t child = 1; child < out.size(); child = 2 * hole + 1) {
+              if (child + 1 < out.size() && cmp(out[child], out[child + 1]))
+                ++child;
+              if (!cmp(candidate, out[child])) break;
+              out[hole] = out[child];
+              hole = child;
+            }
+            out[hole] = candidate;
             if (quantized) code_limit = quantized_limit(out.front().d);
           }
         };

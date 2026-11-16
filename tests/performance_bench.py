@@ -17,9 +17,14 @@ float32 rounding difference for an incorrect result. Unlike the historical
 /tmp/bench_parts.py workload, these vectors do not repeat every 200 rows.
 The generator, oracle compilation, result comparison, /proc sampling and
 post-acknowledgement SIGKILL recovery check are outside measured phases.
+MVDB_SYNC_COMMIT is inherited and its requested value is recorded; historical
+binaries may ignore it and always synchronize. SIGKILL tests process recovery
+with the host kernel alive, not power loss or kernel failure.
 I/O is Linux per-process /proc accounting, not the platform's unknown B metric.
 RSS is the engine's VmHWM; driver/oracle memory is excluded. Fresh data
 directories default to the repository filesystem, since /tmp can be tmpfs.
+Kernel page-cache memory is excluded, and write accounting does not certify
+completed device writeback by the time an acknowledgement is received.
 """
 
 import argparse
@@ -254,7 +259,7 @@ def run_one(binary, args, workload):
             queried = sample_process(engine.process.pid)
             digest = check_answers(responses, expected)
             disk = {p.name: p.stat().st_size for p in Path(temp).iterdir() if p.is_file()}
-            # Kill after all acknowledged commits, without any graceful close.
+            # Process-crash recovery only: the host kernel/page cache stay alive.
             # Recovery must reproduce the already verified exact answers.
             engine.kill()
             started = time.perf_counter()
@@ -270,6 +275,9 @@ def run_one(binary, args, workload):
             engine.close()
             return dict(write_s=write_s, filtered_s=filtered_s,
                         unfiltered_s=unfiltered_s, query_s=filtered_s + unfiltered_s,
+                        total_s=write_s + filtered_s + unfiltered_s,
+                        lifecycle_s=startup_s + schema_s + write_s + filtered_s +
+                                    unfiltered_s + recovery_s + shutdown_s,
                         engine_peak_rss_bytes=queried["VmHWM_bytes"],
                         startup_s=startup_s, schema_s=schema_s, recovery_s=recovery_s,
                         shutdown_s=shutdown_s, write_io=delta(written, before),
@@ -296,6 +304,8 @@ def main():
     parser.add_argument("--ties", choices=("copies", "zeros"), default="copies",
                         help="duplicate random vectors (default) or the historical zero cluster")
     parser.add_argument("--cpus", help="comma-separated engine CPU affinity; default first two allowed CPUs")
+    parser.add_argument("--driver-cpu", type=int,
+                        help="optional separate CPU affinity for the benchmark driver")
     parser.add_argument("--json", type=Path, help="save all raw rounds and medians")
     parser.add_argument("--data-parent", type=Path, default=ROOT,
                         help="writable directory for fresh databases (default repository root)")
@@ -311,23 +321,32 @@ def main():
     args.cpus = set(map(int, args.cpus.split(","))) if args.cpus else set(sorted(allowed)[:2])
     if not args.cpus or not args.cpus <= allowed:
         parser.error("--cpus must be a nonempty subset of %s" % sorted(allowed))
+    if args.driver_cpu is not None and args.driver_cpu not in allowed:
+        parser.error("--driver-cpu must belong to %s" % sorted(allowed))
     if not args.data_parent.is_dir():
         parser.error("--data-parent must be an existing writable directory")
     binaries = [str(Path(binary).resolve()) for binary in
                 (args.binary or [ROOT / "minivectordb"])]
     if any(not os.access(binary, os.X_OK) for binary in binaries):
         parser.error("every --binary must exist and be executable")
+    if args.driver_cpu is not None:
+        os.sched_setaffinity(0, {args.driver_cpu})
     with tempfile.TemporaryDirectory(prefix="mvdb-perf-driver-") as directory:
         workload = prepare(args, Path(directory))
         report = dict(workload=dict(rows=args.rows, dims=args.dims, queries=args.queries,
                                    batch=args.batch, commits=(args.rows + args.batch - 1)//args.batch,
                                    groups=args.groups, k=args.k, seed=args.seed,
-                                   engine_cpus=sorted(args.cpus), dataset="random-dyadic-float32",
+                                   engine_cpus=sorted(args.cpus),
+                                   driver_cpus=sorted(os.sched_getaffinity(0)),
+                                   dataset="random-dyadic-float32",
                                    tied_vectors=args.ties,
                                    data_parent=str(args.data_parent.resolve()),
                                    data_filesystem=subprocess.check_output(
                                        ["stat", "-f", "-c", "%T", str(args.data_parent)], text=True).strip(),
-                                   mode="exact", requests_preencoded=True),
+                                   mode="exact", requests_preencoded=True,
+                                   requested_commit_sync=os.environ.get("MVDB_SYNC_COMMIT", "0") == "1",
+                                   crash_test="SIGKILL-with-kernel-alive",
+                                   power_loss_tested=False),
                       preparation_s=workload[4], oracle_s=workload[5], binaries={})
         runs = {binary: [] for binary in binaries}
         for repeat in range(args.rounds):
@@ -340,7 +359,7 @@ def main():
                          result["unfiltered_s"], result["engine_peak_rss_bytes"] / 2**20),
                       file=sys.stderr, flush=True)
         for binary, values in runs.items():
-            keys = ("write_s", "filtered_s", "unfiltered_s", "query_s",
+            keys = ("write_s", "filtered_s", "unfiltered_s", "query_s", "total_s", "lifecycle_s",
                     "engine_peak_rss_bytes", "startup_s", "schema_s", "recovery_s", "shutdown_s")
             report["binaries"][binary] = dict(
                 median={key: statistics.median(value[key] for value in values) for key in keys},

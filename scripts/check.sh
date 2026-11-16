@@ -19,6 +19,19 @@ python3 tests/test_minivector.py
 echo "== exact pruning regression =="
 python3 tests/exact_pruning_test.py
 
+echo "== SELECT template regression =="
+python3 tests/select_plan_test.py
+
+echo "== durable WAL alignment and recovery =="
+python3 tests/wal_alignment_test.py
+
+echo "== immediate acknowledged-commit crash recovery =="
+MVDB_SYNC_COMMIT=0 python3 tests/commit_crash_test.py
+MVDB_SYNC_COMMIT=1 python3 tests/commit_crash_test.py
+
+echo "== commit synchronization policy and interrupted checkpoints =="
+python3 tests/commit_sync_policy_test.py
+
 echo "== legacy protocol tests =="
 python3 tests/protocol_test.py
 
@@ -36,6 +49,8 @@ g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
     -o "$SAN_BIN" src/minivectordb.cpp
 MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/test_minivector.py
 MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/exact_pruning_test.py
+MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/select_plan_test.py
+MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/wal_alignment_test.py
 
 echo "== ASan/UBSan quantized dot product tests =="
 g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \

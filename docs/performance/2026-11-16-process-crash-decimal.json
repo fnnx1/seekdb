@@ -1,0 +1,282 @@
+{
+  "/tmp/mvdb-process-crash-8gys7_k8/baseline": {
+    "median_write_s": 0.1298155050026253,
+    "runs": [
+      {
+        "write_s": 0.11592007099534385,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10649600,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.12237619100051234,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10682368,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.1298155050026253,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 11534336,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.12351166599546559,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10649600,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.13024867400235962,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10780672,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.14632319899828872,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 11206656,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.3070162059957511,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10682368,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      }
+    ],
+    "source_sha256": "40f4dfcfb62db852d34d2f6dec00e9748ac5eaeae09dd9a64fc79f18c717d57e",
+    "commit_policy": "per-commit-fdatasync"
+  },
+  "/tmp/mvdb-process-crash-8gys7_k8/candidate": {
+    "median_write_s": 0.03619145799893886,
+    "runs": [
+      {
+        "write_s": 0.0359096510001109,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 5734400,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.03596673499851022,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 5734400,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.035843019002641086,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 5734400,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.03654287000244949,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 5734400,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.03619145799893886,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 5734400,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.03632659600407351,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 5734400,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      },
+      {
+        "write_s": 0.036198059999151155,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 5734400,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        },
+        "requested_commit_sync": false,
+        "crash_test": "SIGKILL-with-kernel-alive",
+        "power_loss_tested": false
+      }
+    ],
+    "source_sha256": "eef9d7d5981b5564e90394f9c2dc0f4b7cb4e007f8347e37d3163b2392df8435",
+    "commit_policy": "fflush-process-crash"
+  }
+}

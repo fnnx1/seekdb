@@ -1,0 +1,82 @@
+{
+  "baseline_source_sha256": "4228f802a394208756b861a1ac43eeb1ddfa6dd0378e348d008680acf43b186e",
+  "candidate_source_sha256": "40f4dfcfb62db852d34d2f6dec00e9748ac5eaeae09dd9a64fc79f18c717d57e",
+  "preliminary_decimal_write": {
+    "baseline_write_s": [
+      0.11520797099910851,
+      0.13069937999898684,
+      0.13200907800091954,
+      0.15214894699965953,
+      0.17820491299971764,
+      0.16425042400078382,
+      0.18561360400053672
+    ],
+    "candidate_write_s": [
+      0.1267819979984779,
+      0.13078143699931388,
+      0.12697394299902953,
+      0.1295779530009895,
+      0.1544860410012916,
+      0.1529552430001786,
+      0.15491675500015845
+    ],
+    "note": "Identical workload run using temporary precursor to tests/write_decimal_bench.py; final run uses the repository harness."
+  },
+  "write_cpu_profile_ms": {
+    "four_decimal": {
+      "total": 27.72,
+      "ast": 3.99,
+      "insert": 20.0,
+      "vector_parse": 16.14,
+      "wal_encode": 0.66,
+      "crc_write": 2.66
+    },
+    "eight_decimal": {
+      "total": 31.02,
+      "ast": 5.72,
+      "insert": 21.56,
+      "vector_parse": 17.25,
+      "wal_encode": 0.71,
+      "crc_write": 2.74
+    }
+  },
+  "rejected_write_experiments": {
+    "typed_insert_protocol_ms": [
+      37.67,
+      34.47
+    ],
+    "swar_decimal_protocol_ms": [
+      37.18,
+      36.51
+    ],
+    "lossless_shuffle_lz": {
+      "dyadic_wal_bytes_approx": [
+        5355000,
+        2349000
+      ],
+      "dyadic_write_ms": [
+        151.6,
+        148.0
+      ],
+      "ordinary_decimal_wal_bytes_approx": [
+        5355000,
+        4930000
+      ],
+      "ordinary_decimal_write_ms": [
+        138.1,
+        145.0
+      ]
+    },
+    "direct_io_preinitialized_nocow": {
+      "write_ms": [
+        148.8,
+        115.4
+      ],
+      "startup_extra_ms": 6.5,
+      "recovery_ms": [
+        22.8,
+        92.0
+      ]
+    }
+  }
+}

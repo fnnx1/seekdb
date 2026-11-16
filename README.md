@@ -9,8 +9,9 @@ The database speaks the official **JSONL stdin/stdout protocol** documented in
 (`{"id":...,"op":"execute","sql":"...","search_mode":"exact"}`) and writes one
 JSON response per line (queries return `columns`/`rows`, DML returns
 `affected_rows`, errors return `ok:false` and a non-empty `error.code`).
-`{"id":...,"op":"shutdown"}` rolls back uncommitted work, persists, replies and
-exits 0. Diagnostics go to **stderr**; all durable state is under **`/data`**.
+`{"id":...,"op":"shutdown"}` rolls back uncommitted work, flushes pending WAL
+writes, replies and exits 0. Diagnostics go to **stderr**; all database state
+is under **`/data`**.
 It does not open a network listener.
 
 ## Build
@@ -54,6 +55,22 @@ VECTORDB_DATA_DIR=/path/to/data ./minivectordb
 If no argument is given, the data directory defaults to `/data`. The directory
 is created if needed. All persistent files (`snapshot.bin`, `wal.bin`) live
 there.
+
+By default, each successful commit flushes its complete WAL group into the
+kernel's file cache before replying. Acknowledged commits survive database
+process termination, including immediate `SIGKILL`, while the host kernel and
+its file cache remain available and no I/O failure occurs. This mode does not
+promise recovery after power loss, kernel failure or host reboot.
+Set `MVDB_SYNC_COMMIT=1` to additionally call `fdatasync` for every commit:
+
+```bash
+MVDB_SYNC_COMMIT=1 ./minivectordb /path/to/data
+```
+
+Unset or `MVDB_SYNC_COMMIT=0` uses the default process-crash mode. Snapshot
+replacement and directory synchronization retain their existing ordering in
+both modes. A commit whose success response was not received may still have
+committed.
 
 Example JSONL session:
 
@@ -127,8 +144,10 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
   immediately and an undo log restores the previous state on `ROLLBACK`.
   Statements are validated before any change, so a failed multi-row statement
   leaves no partial effect. `COMMIT` appends all statements of the transaction
-  to the WAL and `fdatasync`s before reporting success. Durable full WAL pages
-  are evicted from the page cache, retaining the partial append page.
+  to the WAL and successfully `fflush`es before reporting success. With
+  `MVDB_SYNC_COMMIT=1`, it additionally `fdatasync`s, then evicts synchronized
+  full WAL pages while retaining the partial append page. The default mode
+  leaves WAL pages in the kernel cache and skips per-commit disk synchronization.
 - **Recovery:** on startup the snapshot is loaded and complete WAL
   transaction groups with sequence greater than the snapshot's sequence are
   replayed. A trailing incomplete record is ignored. Auto-commit statements are
@@ -193,13 +212,26 @@ separate `tests/large_data_test.py` loads 100k x 128D, checks exact TopK,
 restarts and records peak RSS.
 
 `tests/performance_bench.py` prepares requests before timing, runs sequential
-durable transactions and exact searches against an independent integer
+acknowledged transactions and exact searches against an independent integer
 oracle, and verifies recovery after killing the process. It defaults to data
 directories on the repository's filesystem, because `/tmp` may be tmpfs.
 The default ties duplicate random vectors; `--ties zeros` reproduces the older
 benchmark's zero-vector cluster. Compare both binaries with the same option.
+The driver inherits `MVDB_SYNC_COMMIT` and records the requested setting;
+historical binaries may ignore it and always synchronize. Its `SIGKILL` check
+tests process crashes with the kernel alive, not power-loss durability.
+Engine RSS excludes the kernel page cache, and Linux write accounting does
+not measure completed device writeback at the response boundary.
 
 ```bash
 python3 tests/performance_bench.py --binary /path/to/baseline \
   --binary ./minivectordb --rounds 7 --cpus 0,1 --json /tmp/performance.json
+```
+
+`tests/commit_crash_test.py` additionally kills the process immediately after
+receiving each tested commit response, before decoding it or issuing a query:
+
+```bash
+python3 tests/commit_crash_test.py
+MVDB_SYNC_COMMIT=1 python3 tests/commit_crash_test.py
 ```

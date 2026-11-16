@@ -1,0 +1,236 @@
+{
+  "/tmp/mvdb-third/baseline": {
+    "median_write_s": 0.13957357600156683,
+    "runs": [
+      {
+        "write_s": 0.1220940300008806,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5363292,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 11956224,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5355197
+        }
+      },
+      {
+        "write_s": 0.12387581499933731,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5363292,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 12349440,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5355197
+        }
+      },
+      {
+        "write_s": 0.1281969450010365,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5363292,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 13250560,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5355197
+        }
+      },
+      {
+        "write_s": 0.13957357600156683,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5363292,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 12365824,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5355197
+        }
+      },
+      {
+        "write_s": 0.16305062900028133,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5363292,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 13824000,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5355197
+        }
+      },
+      {
+        "write_s": 0.15634476599916525,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5363292,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 12546048,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5355197
+        }
+      },
+      {
+        "write_s": 0.158987878001426,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5363292,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 12365824,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5355197
+        }
+      }
+    ]
+  },
+  "./minivectordb": {
+    "median_write_s": 0.12449146399922029,
+    "runs": [
+      {
+        "write_s": 0.12297717900037242,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10665984,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        }
+      },
+      {
+        "write_s": 0.12156076199971722,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10649600,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        }
+      },
+      {
+        "write_s": 0.12243375300022308,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10682368,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        }
+      },
+      {
+        "write_s": 0.12449146399922029,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 11894784,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        }
+      },
+      {
+        "write_s": 0.1549007880003046,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10649600,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        }
+      },
+      {
+        "write_s": 0.15246345899868174,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 10960896,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        }
+      },
+      {
+        "write_s": 0.1340741980002349,
+        "io": {
+          "rchar": 14869967,
+          "wchar": 5742592,
+          "syscr": 2100,
+          "syscw": 600,
+          "read_bytes": 0,
+          "write_bytes": 11206656,
+          "cancelled_write_bytes": 0
+        },
+        "files": {
+          "snapshot.bin": 20,
+          "wal.bin": 5738496
+        }
+      }
+    ]
+  }
+}
