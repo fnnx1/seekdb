@@ -2,13 +2,13 @@
  "meta": {
   "question_id": 600081,
   "question": "轻量向量数据库（MiniVectorDB）",
-  "status": "technical_joint_record_2026-11-14",
+  "status": "technical_joint_record_2026-11-16",
   "synthetic": false,
   "language": "zh-CN",
-  "notes": "Technical learning record recovered from the actual collaboration: the student proposed the technical direction and acceptance criteria, the agent implemented and measured, and the results are actual tool/platform outputs. c21 is a student-provided verbatim reflection (2026-11-14); c22 is a recovered student direction for the exact-pruning exploration. No experimental numbers are invented; the exact-pruning candidate 8a55a2f is verified locally (integer oracle + SIGKILL recovery + full check) but not formally evaluated.",
+  "notes": "Technical learning record recovered from the actual collaboration: the student proposed the technical direction and acceptance criteria, the agent implemented and measured, and the results are actual tool/platform outputs. c21 is a student-provided verbatim reflection (2026-11-14); c22/c23 are recovered student directions. Measurements after 2026-11-16 use the real btrfs filesystem, never tmpfs. No experimental numbers are invented.",
   "public_cases": "mysqltest v4 (20 cases/95 SQL); official JSONL checker handshake + 20/20 PASS on host and Docker",
   "official_driver": "STDIO_PROTOCOL.md + protocol_check; formal 29 cases (9 hidden) passed on 2026-11-11",
-  "platform_result": "2026-11-13: a246a0f MySQL pass, E=1495.208476, prompt raw 14.5; 742b6cf MySQL pass, E=1518.604488, prompt raw 15.5. 2026-11-14: ba4f1bf MySQL pass, E=1681.836634; its Agent Prompt result was returned invalid for that round (same material had scored 14.5/15.5 earlier). 2026-11-14 exact-pruning candidate 8a55a2f is not submitted; local 7-round benchmark vs 03e528d: write 1.53x, filtered 1.44x, unfiltered 2.23x, all queries 1.92x; RSS 15.15→14.34MiB. Leaderboard: prompt raw 15.5 rank 13 (34 pts); performance rank 164, 0 pts; combined 41, total 654."
+  "platform_result": "2026-11-14: ba4f1bf MySQL pass, E=1681.836634; prompt invalid that round. 2026-11-14: b7f536d exact-pruning MySQL pass, E=2692.094842, prompt raw 18.5 (rank 21, 30 pts; performance rank 131, 0 pts; combined 53, total 650). 2026-11-16: HEAD 21a190c (quantization-setup + dot-pair) is not submitted; local btrfs query 49.06→42.89ms vs b7f536d (~12.6%)."
  },
  "user_prompts": [
   {
@@ -278,6 +278,18 @@
    "attempt": "实现量化缓存（每表 32MiB 上限，大表回退流式扫描）、int8 AVX2 点积；行单元格 88B→16B；协议输入缓冲化 + from_chars；WAL fdatasync 只丢完整页、保留部分尾页。用整数 oracle 校验全部 1,000 条查询，并在 SIGKILL 恢复后再校验 1,000 条；7 轮交替基准对比 03e528d。",
    "result": "同一台机器、CPU 0-1、NVMe，7 轮交替中位数：写 100 次提交 265.33→173.36ms（1.53×），500 过滤查询 26.81→18.57ms（1.44×），500 不过滤 64.12→28.74ms（2.23×），查询合计 90.88→47.28ms（1.92×），峰值 RSS 15.15→14.34MiB；7,000 次初始查询与 7,000 次 SIGKILL 恢复后查询全部与整数 oracle 一致。",
    "student_takeaway": "exact 约束下量化只能当拒绝过滤器，不能提供结果距离；存活者必须用原始距离复核。收益在常规分布明显，但离群点/近似并列会退化，所以精确性和边界校验优先于吞吐。"
+  },
+  {
+   "id": "c23",
+   "role": "student",
+   "source": "recovered_student_direction_btrfs_profile_2026-11-16",
+   "dimension_hint": "独立验证与质疑",
+   "content": "我把性能评估从 /tmp 改到 btrfs 后，结论完全变了：写入 130ms 里 fdatasync 占 92.9ms（100 次提交），WAL 编码只有约 5ms、引擎解析/行构造 24ms、协议 20ms；tmpfs 上 fsync≈0 让我误判了写瓶颈。查询 43–49ms 里，约 13.4 万次精确复核约 27ms、400–550 万次量化拒绝约 40ms。基于这个认识我做了两个可验证的小改动：量化缓存构建去掉逐坐标除法与 round（过滤 19.99→16.85ms），以及把两个 32 坐标 maddubs 的 int16 结果先相加再统一加宽（查询 44.40→42.89ms）。同时证伪了 8-bit 细量化（-2.1%）、WAL 预分配（中位 -5% 但首次 fallocate 1.42s 尖峰）、写路径拷贝消除（噪声内）。",
+   "context": "把读写基准从 tmpfs 换到真实 btrfs 后重做分相，修正对写瓶颈的判断，并用可证伪的小实验决定保留/回退。",
+   "agent_analysis": "tmpfs 没有真实落盘，fsync≈0 掩盖了 100 次提交的成本；btrfs 上 fdatasync 92.9ms 是写入 130ms 的 71%，WAL 编码和解析只有约 29ms。查询侧拒绝点积与精确复核各占约 40/27ms，细量化只减少少量壳层存活行。",
+   "attempt": "在 btrfs 上预生成请求并加协议/执行分相计时；量化构建用倒数乘+边界舍入；拒绝点积把两个 32 坐标 maddubs 的 int16 结果先相加再统一 madd_epi16 加宽；对 8-bit、WAL 预分配、写拷贝消除各做 7 轮对比后按收益回退。",
+   "result": "btrfs 上 7 轮交替中位数：写 130ms（fdatasync 92.9ms）；查询 49.06→44.40→42.89ms（量化构建 + dot-pair，合计约 12.6%）；过滤 19.83→15.65→15.69ms；精确复核 133.7k 行；量化拒绝约 400–550 万行；RSS 14.33MiB；WAL 逻辑 5,355,200B；全码对拍核测试与完整 check.sh 全绿。8-bit、WAL 预分配、写拷贝消除均因收益不足回退。",
+   "student_takeaway": "测量环境会决定优化方向；tmpfs 上的 fsync≈0 是假象。逐提交持久化的 fdatasync 是写侧物理下限，微优化要先证明收益再保留，证伪同样是有价值的结论。"
   }
  ],
  "experiments": [
@@ -433,13 +445,21 @@
    "command": "tests/performance_bench.py --rounds 7 --cpus 0,1; integer oracle + SIGKILL recovery",
    "output": "vs 03e528d: write 265.33→173.36ms (1.53x); filtered 26.81→18.57ms (1.44x); unfiltered 64.12→28.74ms (2.23x); all queries 90.88→47.28ms (1.92x); RSS 15.15→14.34MiB; 7,000 initial + 7,000 recovered queries exact; full check passed.",
    "status": "observed"
+  },
+  {
+   "id": "e20",
+   "owner": "student+agent",
+   "hypothesis": "真实 btrfs 上的分相决定优化方向",
+   "command": "btrfs profile + 7-round alternating benchmarks",
+   "output": "write 130ms (fdatasync 92.9ms); query 49.06→44.40 (quantization-setup) →42.89 (dot-pair); 8-bit -2.1%, WAL prealloc median -5% but 1.42s first fallocate spike, write-copy elision within noise; all reverted.",
+   "status": "observed"
   }
  ],
  "platform_observations": {
   "old_record": "记录 47249429（commit 6cec8a6）状态=4（已取消），未判题",
   "new_record": "记录 47249444（commit 9720e3e）状态=2（执行成功），MySQL 正式用例通过（成功 1 / 失败 0）",
   "leaderboard": "性能 E=967.672080（性能排名 129/162，0 分）；Agent Prompt 原始分 3.0（排名 37/162，22 分）；加赛综合 22 分，总榜第 63。",
-  "latest_records": "a246a0f: E=1495.208476, prompt 14.5. 742b6cf: E=1518.604488, prompt 15.5. ba4f1bf: E=1681.836634 (best formal so far); prompt invalid that round. 8a55a2f (exact pruning) verified locally, not submitted.",
+  "latest_records": "b7f536d: E=2692.094842, prompt 18.5 (rank 21, 30 pts). 21a190c (quantization-setup + dot-pair): verified locally on btrfs, not submitted; query 49.06→42.89ms.",
   "leaderboard_2026_11_14": "prompt raw 15.5 rank 13 (34 pts); performance E=1518.604488 rank 164 (0 pts); combined rank 41; total 654."
  },
  "retrospective": [
@@ -472,6 +492,11 @@
    "id": "r6",
    "owner": "student",
    "content": "exact 约束下，量化只能做拒绝过滤器；存活者必须用原始距离复核。先把精确性和边界校验固定，再谈吞吐。"
+  },
+  {
+   "id": "r7",
+   "owner": "student",
+   "content": "先在真实文件系统上分相，再决定优化对象；tmpfs 会让 fsync 成本消失，导致错误结论。"
   }
  ],
  "limitations": [
@@ -482,7 +507,8 @@
   "材料中的学生方向为恢复/压缩记录，不是逐字对话；实验结果与平台记录为实际观察，未编造数字。",
   "c21 之后的内存向量前缀与按 WAL 大小跳过关闭快照仍在正式验证中；在拿到 ba4f1bf 的 E 前不把它们写成已确认收益。",
   "Prompt 评测存在无效轮次：同一份材料在 742b6cf 得 15.5，在 ba4f1bf 被判无效；不能把单轮无效当成材料一定有问题，但需要保留可复核的引用与摘要。",
-  "量化拒绝在离群点、近似并列或其他分布上可能退化到接近全扫；4M 行未跑；8a55a2f 尚未正式评测，不能把本地倍数当成正式 E 倍数。"
+  "量化拒绝在离群点、近似并列或其他分布上可能退化到接近全扫；4M 行未跑；8a55a2f 尚未正式评测，不能把本地倍数当成正式 E 倍数。",
+  "写侧在逐提交 fdatasync 的持久性约束下已接近物理下限（btrfs 92.9ms/100 次提交）；查询精确复核与拒绝点积仍是剩余成本，继续压可能只有个位数收益。"
  ],
  "student_evidence": [
   {
@@ -731,6 +757,20 @@
    "result_evidence": {
     "pointer": "/conversations/17/result",
     "quote": "500 不过滤 64.12→28.74ms（2.23×），查询合计 90.88→47.28ms（1.92×）"
+   },
+   "expected_tier": "2.0"
+  },
+  {
+   "id": "c23",
+   "dimension": "独立验证与质疑",
+   "reason": "学生主动把基准从 tmpfs 换到真实 btrfs，重做分相后发现 fdatasync 占写入 71%，推翻了此前对写瓶颈的判断；随后用量化构建与 dot-pair 两个可验证改动拿到 12.6% 查询收益，并用 7 轮对比证伪 8-bit、WAL 预分配与写拷贝消除。属于“测量纠偏→实验→保留/证伪→局限”的 2.0 档实例。",
+   "student_evidence": {
+    "pointer": "/conversations/18/content",
+    "quote": "我把性能评估从 /tmp 改到 btrfs 后，结论完全变了"
+   },
+   "result_evidence": {
+    "pointer": "/conversations/18/result",
+    "quote": "查询 49.06→44.40→42.89ms"
    },
    "expected_tier": "2.0"
   }
