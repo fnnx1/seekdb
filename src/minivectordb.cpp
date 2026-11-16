@@ -3394,8 +3394,46 @@ class DB {
         static thread_local std::vector<Cand> selected;
         selected.clear();
         selected.reserve(use_heap ? keep : total);
+        auto evaluate = [&](const float *vector_data, int64_t pk, size_t idx,
+                            std::vector<Cand> &out, double &threshold_radius) {
+          Cand candidate{(double)l2_sq_f32(vector_data, oe.vec.data(), dim), pk, idx};
+          if (!use_heap) {
+            out.push_back(candidate);
+          } else if (out.size() < keep) {
+            out.push_back(candidate);
+            std::push_heap(out.begin(), out.end(), cmp);
+            if (out.size() == keep && quantized) threshold_radius = radius(out.front().d);
+          } else if (cmp(candidate, out.front())) {
+            std::pop_heap(out.begin(), out.end(), cmp);
+            out.back() = candidate;
+            std::push_heap(out.begin(), out.end(), cmp);
+            if (quantized) threshold_radius = radius(out.front().d);
+          }
+        };
+        struct Pending {
+          const float *vector_data;
+          int64_t pk;
+          size_t idx;
+          double quant_d;
+        };
+        struct ScanState {
+          std::vector<float> scratch;
+          Pending pending[4];
+          size_t count = 0;
+        };
+        auto flush_pending = [&](ScanState &state, std::vector<Cand> &out,
+                                 double &threshold_radius) {
+          for (size_t index = 0; index < state.count; ++index) {
+            const Pending &candidate = state.pending[index];
+            const double bound = threshold_radius + t.quant_rows[candidate.idx].error;
+            if (candidate.quant_d > bound * bound) continue;
+            evaluate(candidate.vector_data, candidate.pk, candidate.idx,
+                     out, threshold_radius);
+          }
+          state.count = 0;
+        };
         auto scan_one = [&](size_t idx, std::vector<Cand> &out,
-                            double &threshold_radius, std::vector<float> &scratch) {
+                            double &threshold_radius, ScanState &state) {
           uint64_t off;
           int64_t pk;
           if (compact) {
@@ -3410,29 +3448,29 @@ class DB {
             off = v.voff;
             pk = r.vals[(size_t)t.pk].i;
           }
-          if (quantized && out.size() == keep && std::isfinite(threshold_radius)) {
+          const bool defer = quantized && out.size() == keep &&
+                             std::isfinite(threshold_radius);
+          double quant_d = 0.0;
+          if (defer) {
             const auto &qr = t.quant_rows[idx];
             const int dot = quant_dot(t.quant_codes.data() + idx * dim,
                                       query_code_data, dim) - 63 * qr.sum;
-            const double quant_d = (qr.norm + query_norm - 2 * dot) * scale2;
+            quant_d = (qr.norm + query_norm - 2 * dot) * scale2;
             const double bound = threshold_radius + qr.error;
             if (quant_d > bound * bound) return;
           }
-          const float *p = base && off + dim * sizeof(float) <= mapped
-                               ? base + off / sizeof(float)
-                               : t.vecs.get(t.rows[idx].vals[(size_t)vcol], scratch);
-          Cand c{(double)l2_sq_f32(p, oe.vec.data(), dim), pk, idx};
-          if (!use_heap) {
-            out.push_back(c);
-          } else if (out.size() < keep) {
-            out.push_back(c);
-            std::push_heap(out.begin(), out.end(), cmp);
-            if (out.size() == keep && quantized) threshold_radius = radius(out.front().d);
-          } else if (cmp(c, out.front())) {
-            std::pop_heap(out.begin(), out.end(), cmp);
-            out.back() = c;
-            std::push_heap(out.begin(), out.end(), cmp);
-            if (quantized) threshold_radius = radius(out.front().d);
+          const bool mapped_vector = base && off + dim * sizeof(float) <= mapped;
+          const float *vector_data = mapped_vector
+              ? base + off / sizeof(float)
+              : t.vecs.get(t.rows[idx].vals[(size_t)vcol], state.scratch);
+          if (defer && mapped_vector) {
+            for (size_t coord = 0; coord < dim; coord += 16)
+              __builtin_prefetch(vector_data + coord, 0, 3);
+            state.pending[state.count++] = {vector_data, pk, idx, quant_d};
+            if (state.count == 4) flush_pending(state, out, threshold_radius);
+          } else {
+            flush_pending(state, out, threshold_radius);
+            evaluate(vector_data, pk, idx, out, threshold_radius);
           }
         };
 #ifdef _OPENMP
@@ -3442,28 +3480,30 @@ class DB {
           #pragma omp parallel num_threads(NT)
           {
             const int tid = omp_get_thread_num();
-            std::vector<float> scratch;
+            ScanState state;
             std::vector<Cand> &out = locals[tid];
             out.reserve(keep);
             double threshold_radius = std::numeric_limits<double>::infinity();
             const long long nrows = (long long)t.rows.size();
             #pragma omp for schedule(static)
             for (long long i = 0; i < nrows; ++i)
-              scan_one((size_t)i, out, threshold_radius, scratch);
+              scan_one((size_t)i, out, threshold_radius, state);
+            flush_pending(state, out, threshold_radius);
           }
           selected.insert(selected.end(), locals[0].begin(), locals[0].end());
           selected.insert(selected.end(), locals[1].begin(), locals[1].end());
         } else
 #endif
         {
-          std::vector<float> scratch;
+          ScanState state;
           double threshold_radius = std::numeric_limits<double>::infinity();
           if (no_filter) {
             for (size_t i = 0; i < t.rows.size(); ++i)
-              scan_one(i, selected, threshold_radius, scratch);
+              scan_one(i, selected, threshold_radius, state);
           } else {
-            for (size_t i : matches) scan_one(i, selected, threshold_radius, scratch);
+            for (size_t i : matches) scan_one(i, selected, threshold_radius, state);
           }
+          flush_pending(state, selected, threshold_radius);
         }
         if (keep < selected.size()) {
           std::nth_element(selected.begin(), selected.begin() + (std::ptrdiff_t)keep,

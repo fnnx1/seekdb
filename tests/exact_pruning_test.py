@@ -163,8 +163,29 @@ def quantization_boundary_cases():
                 db.close()
 
 
+def survivor_batch_cases():
+    for dim, count in [(17, 515), (128, 513), (128, 514), (128, 515),
+                       (128, 2049), (128, 2050), (128, 2051)]:
+        db = Database()
+        try:
+            db.sql("CREATE TABLE t(id BIGINT PRIMARY KEY, grp BIGINT, v VECTOR(%d))" % dim)
+            for tied in [True, False]:
+                rows = [(count - index, index % 3,
+                         [1 if tied else (count - index) // 8] * dim)
+                        for index in range(count)]
+                rows[-1][2][:] = [0] * dim
+                insert(db, rows)
+                for group in [None, 0, 1, 2]:
+                    for k, offset in [(1, 0), (10, 0), (10, 3), (64, 0)]:
+                        check(db, [0] * dim, count, group, k, offset, oracle=rows)
+                db.sql("TRUNCATE TABLE t")
+        finally:
+            db.close()
+
+
 if __name__ == "__main__":
     integer_and_mutation_cases()
     scale_cases()
     quantization_boundary_cases()
-    print("PASS exact_pruning_test: exact TopK, ties, float scales, cache invalidation")
+    survivor_batch_cases()
+    print("PASS exact_pruning_test: exact TopK, ties, float scales, cache invalidation, survivor batches")
