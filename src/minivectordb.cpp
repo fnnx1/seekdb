@@ -165,6 +165,16 @@ static int quant_dot_avx2(const int8_t *a, const uint8_t *b, size_t n) {
   __m256i sum = _mm256_setzero_si256();
   const __m256i one = _mm256_set1_epi16(1);
   size_t j = 0;
+  for (; j + 64 <= n; j += 64) {
+    __m256i pairs0 = _mm256_maddubs_epi16(
+        _mm256_loadu_si256((const __m256i *)(b + j)),
+        _mm256_loadu_si256((const __m256i *)(a + j)));
+    __m256i pairs1 = _mm256_maddubs_epi16(
+        _mm256_loadu_si256((const __m256i *)(b + j + 32)),
+        _mm256_loadu_si256((const __m256i *)(a + j + 32)));
+    __m256i pairs = _mm256_add_epi16(pairs0, pairs1);
+    sum = _mm256_add_epi32(sum, _mm256_madd_epi16(pairs, one));
+  }
   for (; j + 32 <= n; j += 32) {
     __m256i pairs = _mm256_maddubs_epi16(
         _mm256_loadu_si256((const __m256i *)(b + j)),

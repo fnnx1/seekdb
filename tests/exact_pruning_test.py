@@ -113,7 +113,8 @@ def scale_cases():
     rng = random.Random(309)
     # Non-multiples of 32 cover the scalar tail of the integer dot product.
     for dim, scale in [(16, 1.0), (17, 2.0 ** -70), (31, 1e30),
-                       (32, 2.0 ** -20), (127, 1.0), (129, 1.0)]:
+                       (32, 2.0 ** -20), (64, 1.0), (65, 1.0),
+                       (96, 1.0), (127, 1.0), (128, 1.0), (129, 1.0)]:
         rows = [(10000 - i, i % 10,
                  [scale * rng.randint(-8, 8) for _ in range(dim)]) for i in range(512)]
         if dim == 127:
