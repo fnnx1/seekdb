@@ -5,10 +5,10 @@
   "status": "technical_joint_record_2026-11-16",
   "synthetic": false,
   "language": "zh-CN",
-  "notes": "Technical learning record recovered from the actual collaboration: the student proposed the technical direction and acceptance criteria, the agent implemented and measured, and the results are actual tool/platform outputs. c21 is a student-provided verbatim reflection (2026-11-14); c22/c23 are recovered student directions. Measurements after 2026-11-16 use the real btrfs filesystem, never tmpfs. No experimental numbers are invented.",
+  "notes": "Technical learning record recovered from the actual collaboration: the student proposed the technical direction and acceptance criteria, the agent implemented and measured, and the results are actual tool/platform outputs. c21 is a student-provided verbatim reflection (2026-11-14); c22/c23 are recovered student directions; c24 is the student's own final optimization (2026-11-16). Measurements after 2026-11-16 use the real btrfs filesystem, never tmpfs. No experimental numbers are invented.",
   "public_cases": "mysqltest v4 (20 cases/95 SQL); official JSONL checker handshake + 20/20 PASS on host and Docker",
   "official_driver": "STDIO_PROTOCOL.md + protocol_check; formal 29 cases (9 hidden) passed on 2026-11-11",
-  "platform_result": "2026-11-14: ba4f1bf MySQL pass, E=1681.836634; prompt invalid that round. 2026-11-14: b7f536d exact-pruning MySQL pass, E=2692.094842, prompt raw 18.5 (rank 21, 30 pts; performance rank 131, 0 pts; combined 53, total 650). 2026-11-16: HEAD 21a190c (quantization-setup + dot-pair) is not submitted; local btrfs query 49.06→42.89ms vs b7f536d (~12.6%)."
+  "platform_result": "2026-11-14: b7f536d exact-pruning MySQL pass, E=2692.094842, prompt raw 18.5 (rank 21, 30 pts; performance rank 131, 0 pts; combined 53, total 650). 2026-11-16: user block-scan candidate (HEAD with 8-row SIMD) not submitted; local btrfs vs b1d105c: query 45.58→31.94 ms (1.43x), unfiltered 1.57x, filtered 1.22x."
  },
  "user_prompts": [
   {
@@ -290,6 +290,18 @@
    "attempt": "在 btrfs 上预生成请求并加协议/执行分相计时；量化构建用倒数乘+边界舍入；拒绝点积把两个 32 坐标 maddubs 的 int16 结果先相加再统一 madd_epi16 加宽；对 8-bit、WAL 预分配、写拷贝消除各做 7 轮对比后按收益回退。",
    "result": "btrfs 上 7 轮交替中位数：写 130ms（fdatasync 92.9ms）；查询 49.06→44.40→42.89ms（量化构建 + dot-pair，合计约 12.6%）；过滤 19.83→15.65→15.69ms；精确复核 133.7k 行；量化拒绝约 400–550 万行；RSS 14.33MiB；WAL 逻辑 5,355,200B；全码对拍核测试与完整 check.sh 全绿。8-bit、WAL 预分配、写拷贝消除均因收益不足回退。",
    "student_takeaway": "测量环境会决定优化方向；tmpfs 上的 fsync≈0 是假象。逐提交持久化的 fdatasync 是写侧物理下限，微优化要先证明收益再保留，证伪同样是有价值的结论。"
+  },
+  {
+   "id": "c24",
+   "role": "student",
+   "source": "student_own_optimization_2026-11-16",
+   "dimension_hint": "实验与反馈迭代",
+   "content": "我最后做的是把量化拒绝从逐行点积改成 8 行块 SIMD：128D 缓存按 32 字节 stripe 交错存 8 行的 4 个坐标，一个 AVX2 lane 累积一行的点积，一次得到 8 行的保守下界掩码，拒绝块不再逐行查元数据。等值 BIGINT 过滤按组稳定排序成连续块，边界行用 lane gather。阈值用全表最大重建误差取保守整数上限，存活者仍用原 float32 核与主键并列规则复核。结果：不过滤 28.78→18.37ms（1.57x）、过滤 16.49→13.56（1.22x）、查询合计 45.58→31.94（1.43x），写 1.05x，RSS +0.04MiB。排除：4 行块、渐进 32 维拒绝（随机数据约 2x 慢）、O3、单线程、AVX-VNNI、WAL 预分配、O_DSYNC。",
+   "context": "学生自己完成的最后一轮查询优化：把逐行量化拒绝改成 8 行块 SIMD，并用分组连续范围服务等值过滤。",
+   "agent_analysis": "逐行点积每行都要一次水平归约和元数据查找；把 8 行的 4 坐标交错进 32 字节 stripe 后，一个 AVX2 lane 就是一行，四条坐标一次乘加，一次得到 8 行掩码。按第一个非主键 BIGINT 稳定排序后，等值过滤只需扫连续块；边界行走 lane gather。保守阈值取全表最大重建误差的整数上限，存活者仍用原 float32 核。",
+   "attempt": "实现 quant_mask8_128 / quant_dot_lane128、quant_order/quant_rank 分组排序、整数 code_limit 与 survivor 队列复检；新增 SIMD lane 与十进制解析测试；benchmark 增加 --ties copies/zeros 以区分重复向量与历史零簇。",
+   "result": "b1d105c 基线 vs 本版本，btrfs，7 轮交替中位数：不过滤 28.78→18.37ms（1.57x），过滤 16.49→13.56（1.22x），查询合计 45.58→31.94（1.43x），写 163.33→156.10（1.05x，噪声内），RSS 14.28→14.32MiB；14,000 初始查询与 14,000 次 SIGKILL 恢复查询全部通过整数 oracle；完整 check.sh 全绿。",
+   "student_takeaway": "布局和内核要一起设计：8 行交错让一条 SIMD lane 对应一行，省掉水平归约；分组排序把等值过滤变成连续块。但收益依赖分布，必须用独立 oracle 和多种 tie 工作负载验证，不能把 1.4x 说成通用 2x。"
   }
  ],
  "experiments": [
@@ -453,13 +465,21 @@
    "command": "btrfs profile + 7-round alternating benchmarks",
    "output": "write 130ms (fdatasync 92.9ms); query 49.06→44.40 (quantization-setup) →42.89 (dot-pair); 8-bit -2.1%, WAL prealloc median -5% but 1.42s first fallocate spike, write-copy elision within noise; all reverted.",
    "status": "observed"
+  },
+  {
+   "id": "e21",
+   "owner": "student",
+   "hypothesis": "8 行交错块 SIMD 可批量拒绝且保持精确",
+   "command": "7-round btrfs benchmark + integer oracle + SIGKILL recovery",
+   "output": "vs b1d105c: query 45.58→31.94ms (1.43x), unfiltered 28.78→18.37 (1.57x), filtered 16.49→13.56 (1.22x), write 1.05x within noise, RSS +0.04MiB; 14,000+14,000 queries exact; full check passed.",
+   "status": "observed"
   }
  ],
  "platform_observations": {
   "old_record": "记录 47249429（commit 6cec8a6）状态=4（已取消），未判题",
   "new_record": "记录 47249444（commit 9720e3e）状态=2（执行成功），MySQL 正式用例通过（成功 1 / 失败 0）",
   "leaderboard": "性能 E=967.672080（性能排名 129/162，0 分）；Agent Prompt 原始分 3.0（排名 37/162，22 分）；加赛综合 22 分，总榜第 63。",
-  "latest_records": "b7f536d: E=2692.094842, prompt 18.5 (rank 21, 30 pts). 21a190c (quantization-setup + dot-pair): verified locally on btrfs, not submitted; query 49.06→42.89ms.",
+  "latest_records": "b7f536d: E=2692.094842, prompt 18.5 (rank 21, 30 pts). User block-scan candidate: verified locally on btrfs, not submitted; query 45.58→31.94 ms vs b1d105c.",
   "leaderboard_2026_11_14": "prompt raw 15.5 rank 13 (34 pts); performance E=1518.604488 rank 164 (0 pts); combined rank 41; total 654."
  },
  "retrospective": [
@@ -497,6 +517,11 @@
    "id": "r7",
    "owner": "student",
    "content": "先在真实文件系统上分相，再决定优化对象；tmpfs 会让 fsync 成本消失，导致错误结论。"
+  },
+  {
+   "id": "r8",
+   "owner": "student",
+   "content": "布局与内核一起设计才能省掉水平归约；分组连续块把等值过滤变成顺序扫描；收益必须用多分布负载验证。"
   }
  ],
  "limitations": [
@@ -508,7 +533,8 @@
   "c21 之后的内存向量前缀与按 WAL 大小跳过关闭快照仍在正式验证中；在拿到 ba4f1bf 的 E 前不把它们写成已确认收益。",
   "Prompt 评测存在无效轮次：同一份材料在 742b6cf 得 15.5，在 ba4f1bf 被判无效；不能把单轮无效当成材料一定有问题，但需要保留可复核的引用与摘要。",
   "量化拒绝在离群点、近似并列或其他分布上可能退化到接近全扫；4M 行未跑；8a55a2f 尚未正式评测，不能把本地倍数当成正式 E 倍数。",
-  "写侧在逐提交 fdatasync 的持久性约束下已接近物理下限（btrfs 92.9ms/100 次提交）；查询精确复核与拒绝点积仍是剩余成本，继续压可能只有个位数收益。"
+  "写侧在逐提交 fdatasync 的持久性约束下已接近物理下限（btrfs 92.9ms/100 次提交）；查询精确复核与拒绝点积仍是剩余成本，继续压可能只有个位数收益。",
+  "块 SIMD 收益依赖数据分布（重复向量 vs 历史零簇有差异），仅 128D 走块路径；其他维度仍逐行。写侧 fdatasync 仍是持久性物理下限。"
  ],
  "student_evidence": [
   {
@@ -771,6 +797,20 @@
    "result_evidence": {
     "pointer": "/conversations/18/result",
     "quote": "查询 49.06→44.40→42.89ms"
+   },
+   "expected_tier": "2.0"
+  },
+  {
+   "id": "c24",
+   "dimension": "实验与反馈迭代",
+   "reason": "学生自己设计并落地了 8 行块 SIMD 拒绝：32 字节 stripe 交错 8 行、一 lane 一行、8 位掩码、分组连续过滤、全表最大误差的保守整数阈值；并用 7 轮对比拿到查询 1.43x，同时明确排除 4 行块、渐进 32 维、O3、单线程、AVX-VNNI、WAL 预分配、O_DSYNC，指出收益依赖分布。属于“设计→实现→测量→排除→局限”的 2.0 档实例。",
+   "student_evidence": {
+    "pointer": "/conversations/19/content",
+    "quote": "一个 AVX2 lane 累积一行的点积"
+   },
+   "result_evidence": {
+    "pointer": "/conversations/19/result",
+    "quote": "不过滤 28.78→18.37ms（1.57x）"
    },
    "expected_tier": "2.0"
   }
