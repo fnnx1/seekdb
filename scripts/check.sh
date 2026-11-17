@@ -22,6 +22,9 @@ python3 tests/exact_pruning_test.py
 echo "== SELECT template regression =="
 python3 tests/select_plan_test.py
 
+echo "== VARCHAR equality indexes and grouped scans =="
+python3 tests/varchar_filter_test.py
+
 echo "== durable WAL alignment and recovery =="
 python3 tests/wal_alignment_test.py
 
@@ -32,6 +35,9 @@ MVDB_SYNC_COMMIT=1 python3 tests/commit_crash_test.py
 echo "== commit synchronization policy and interrupted checkpoints =="
 python3 tests/commit_sync_policy_test.py
 
+echo "== WAL cache advice and acknowledged-commit recovery =="
+python3 tests/wal_cache_advice_test.py
+
 echo "== legacy protocol tests =="
 python3 tests/protocol_test.py
 
@@ -40,6 +46,9 @@ python3 tests/fuzz_smoke.py
 
 echo "== large-data smoke =="
 python3 tests/large_data_test.py
+
+echo "== file-backed scan transactions and crash recovery =="
+python3 tests/spill_scan_test.py
 
 echo "== ASan/UBSan legacy tests =="
 SAN_BIN="$(mktemp -u /tmp/minivectordb-san.XXXXXX)"
@@ -50,6 +59,7 @@ g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
 MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/test_minivector.py
 MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/exact_pruning_test.py
 MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/select_plan_test.py
+MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/varchar_filter_test.py
 MINIVECTORDB="$SAN_BIN" ASAN_OPTIONS=detect_leaks=1 python3 tests/wal_alignment_test.py
 
 echo "== ASan/UBSan quantized dot product tests =="
@@ -68,6 +78,12 @@ echo "== ASan/UBSan compact cell ownership and snapshot tests =="
 g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -o "$SAN_BIN" tests/stored_value_test.cpp
+ASAN_OPTIONS=detect_leaks=1 "$SAN_BIN"
+
+echo "== ASan/UBSan file-backed read windows =="
+g++ -O1 -g -std=c++17 -Wall -Wextra -Wno-unused-parameter -pthread \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -o "$SAN_BIN" tests/vector_store_read_test.cpp
 ASAN_OPTIONS=detect_leaks=1 "$SAN_BIN"
 
 echo "== optional clang-tidy =="

@@ -6,6 +6,10 @@ its response, including BEGIN / INSERT / COMMIT separately for every batch.
 The default workload is 10,000 x 128D, 100 commits, 500 filtered and 500 full
 exact Top-10 searches. The independent exhaustive integer oracle checks every
 answer, including primary-key tie ordering. No ANN results are accepted.
+Equality filters use BIGINT by default; --filter-type varchar uses equivalent
+VARCHAR group labels. --warmup N runs N complete query sequences before query
+measurement (default 0). Warmup time and I/O are recorded separately, while
+the engine's peak RSS includes warmup.
 
 Example (alternates the order of binaries between rounds):
   python3 tests/performance_bench.py --binary /tmp/baseline \
@@ -20,7 +24,7 @@ post-acknowledgement SIGKILL recovery check are outside measured phases.
 MVDB_SYNC_COMMIT is inherited and its requested value is recorded; historical
 binaries may ignore it and always synchronize. SIGKILL tests process recovery
 with the host kernel alive, not power loss or kernel failure.
-I/O is Linux per-process /proc accounting, not the platform's unknown B metric.
+I/O is Linux per-process /proc accounting, not the platform's cgroup device B.
 RSS is the engine's VmHWM; driver/oracle memory is excluded. Fresh data
 directories default to the repository filesystem, since /tmp can be tmpfs.
 Kernel page-cache memory is excluded, and write accounting does not certify
@@ -120,19 +124,23 @@ def prepare(args, directory):
     def vector_text(vector):
         return "[" + ",".join(format(x / 16, ".4f") for x in vector) + "]"
 
+    def group_text(group):
+        return "'group_%d'" % group if args.filter_type == "varchar" else str(group)
+
     ident = 1
-    schema = encode(ident, "CREATE TABLE t (id BIGINT PRIMARY KEY, grp BIGINT, "
-                    "v VECTOR(%d));" % args.dims)
+    group_type = "VARCHAR(32)" if args.filter_type == "varchar" else "BIGINT"
+    schema = encode(ident, "CREATE TABLE t (id BIGINT PRIMARY KEY, grp %s, "
+                    "v VECTOR(%d));" % (group_type, args.dims))
     writes = []
     for start in range(0, args.rows, args.batch):
-        records = ",".join("(%d,%d,'%s')" % (pk, group, vector_text(vector))
+        records = ",".join("(%d,%s,'%s')" % (pk, group_text(group), vector_text(vector))
                            for pk, group, vector in rows[start:start + args.batch])
         for sql in ("BEGIN;", "INSERT INTO t VALUES " + records + ";", "COMMIT;"):
             ident += 1
             writes.append(encode(ident, sql))
     searches = []
     for group, vector in queries:
-        condition = " WHERE grp = %d" % group if group >= 0 else ""
+        condition = " WHERE grp = %s" % group_text(group) if group >= 0 else ""
         sql = ("SELECT id FROM t%s ORDER BY L2_DISTANCE(v,'%s') LIMIT %d;"
                % (condition, vector_text(vector), args.k))
         ident += 1
@@ -247,6 +255,13 @@ def run_one(binary, args, workload):
                 engine.request(payload)
             write_s = time.perf_counter() - started
             written = sample_process(engine.process.pid)
+            warmup_s = 0.0
+            for _ in range(args.warmup):
+                started = time.perf_counter()
+                warmed_responses = [engine.request(payload) for payload in searches]
+                warmup_s += time.perf_counter() - started
+                check_answers(warmed_responses, expected)
+            warmed = sample_process(engine.process.pid) if args.warmup else written
             responses = []
             started = time.perf_counter()
             for payload in searches[:args.queries // 2]:
@@ -276,12 +291,14 @@ def run_one(binary, args, workload):
             return dict(write_s=write_s, filtered_s=filtered_s,
                         unfiltered_s=unfiltered_s, query_s=filtered_s + unfiltered_s,
                         total_s=write_s + filtered_s + unfiltered_s,
-                        lifecycle_s=startup_s + schema_s + write_s + filtered_s +
+                        lifecycle_s=startup_s + schema_s + write_s + warmup_s + filtered_s +
                                     unfiltered_s + recovery_s + shutdown_s,
                         engine_peak_rss_bytes=queried["VmHWM_bytes"],
                         startup_s=startup_s, schema_s=schema_s, recovery_s=recovery_s,
                         shutdown_s=shutdown_s, write_io=delta(written, before),
-                        query_io=delta(queried, written), files_before_crash=disk,
+                        warmup_s=warmup_s, warmup_io=delta(warmed, written),
+                        query_io=delta(queried, warmed), files_before_crash=disk,
+                        warmup_queries_verified=args.warmup * len(expected),
                         exact_queries_verified=len(expected),
                         recovery_queries_verified=len(expected), result_sha256=digest)
         finally:
@@ -303,6 +320,10 @@ def main():
     parser.add_argument("--seed", type=int, default=20261114)
     parser.add_argument("--ties", choices=("copies", "zeros"), default="copies",
                         help="duplicate random vectors (default) or the historical zero cluster")
+    parser.add_argument("--filter-type", choices=("bigint", "varchar"), default="bigint",
+                        help="equality-filter column type (default bigint)")
+    parser.add_argument("--warmup", type=int, default=0,
+                        help="full query-sequence warmup passes outside measured T (default 0)")
     parser.add_argument("--cpus", help="comma-separated engine CPU affinity; default first two allowed CPUs")
     parser.add_argument("--driver-cpu", type=int,
                         help="optional separate CPU affinity for the benchmark driver")
@@ -317,6 +338,8 @@ def main():
             parser.error("--%s must be positive" % name)
     if args.dims > 1024 or args.queries % 2:
         parser.error("--dims must be <=1024; --queries must be even")
+    if args.warmup < 0:
+        parser.error("--warmup must be nonnegative")
     allowed = os.sched_getaffinity(0)
     args.cpus = set(map(int, args.cpus.split(","))) if args.cpus else set(sorted(allowed)[:2])
     if not args.cpus or not args.cpus <= allowed:
@@ -336,6 +359,9 @@ def main():
         report = dict(workload=dict(rows=args.rows, dims=args.dims, queries=args.queries,
                                    batch=args.batch, commits=(args.rows + args.batch - 1)//args.batch,
                                    groups=args.groups, k=args.k, seed=args.seed,
+                                   filter_type=args.filter_type, warmup=args.warmup,
+                                   warmup_queries=args.warmup * args.queries,
+                                   warmup_included_in_measured_t=False,
                                    engine_cpus=sorted(args.cpus),
                                    driver_cpus=sorted(os.sched_getaffinity(0)),
                                    dataset="random-dyadic-float32",
@@ -360,7 +386,8 @@ def main():
                       file=sys.stderr, flush=True)
         for binary, values in runs.items():
             keys = ("write_s", "filtered_s", "unfiltered_s", "query_s", "total_s", "lifecycle_s",
-                    "engine_peak_rss_bytes", "startup_s", "schema_s", "recovery_s", "shutdown_s")
+                    "engine_peak_rss_bytes", "startup_s", "schema_s", "recovery_s", "shutdown_s",
+                    "warmup_s")
             report["binaries"][binary] = dict(
                 median={key: statistics.median(value[key] for value in values) for key in keys},
                 rounds=values)

@@ -1,0 +1,36 @@
+{
+  "head": "184e413990062f89cdb0de32f63b1a3aba2d5438",
+  "artifacts": {
+    "src/minivectordb.cpp": "e79d0f04639f334fba6cc2095733af5cb74332968411871c3c1cca8fa5413ec2",
+    "minivectordb": "51898f47beee031bae65adf271ed42778802ff87c115994b2f59ba7bf7422b49",
+    "tests/performance_bench.py": "0f5d6ef5c0f712b8354b2cd86ade10fb7528c41aaa75b172aad95a52908a6203",
+    "tests/cgroup_performance_bench.py": "9fbd9822abc46aea39af2e200d7671682edc5502bd8fe83c3ba4ccde8676c9cf"
+  },
+  "baseline_source_sha256": "5eef1321b34265f47e8fa01543c1827d9394c4f3c16513f4ed47ae7df4792d95",
+  "baseline_binary_sha256": "92c5d051a98ee20fa632429139c8b5d7df7d888ee345c2d64ff4ed6e40639031",
+  "baseline_scope": "184e413 plus previously tested file-backed scan buffer; includes prior uncommitted work",
+  "new_changes": [
+    "VARCHAR equality index and quantized grouping",
+    "1MiB WAL page-cache advice without default fdatasync"
+  ],
+  "excluded": [
+    "COW/compression switch",
+    "periodic fdatasync",
+    "packed4",
+    "asymmetric7",
+    "pair8",
+    "INSERT AST prototype",
+    "alias plan prototype"
+  ],
+  "final_container_binary_sha256": "71190751bfb8fab27dd693475b6fde809fa7ea93544323aff9482f28994ce76f",
+  "baseline_container_binary_sha256": "eae51a05de3f1462dd043e064276ffbb4990d3a25035faafdddcb7c6971c59ac",
+  "docker_image_id": "sha256:17487e106b05a4ba1ba8423b06fb30923469becb32aa3834e16f597b9216debc",
+  "validation": {
+    "check.sh": "ALL CHECKS PASSED",
+    "host_public_cases": 20,
+    "docker_public_cases": 20,
+    "varchar_oracle_queries": 494,
+    "wal_advice_cases": 4,
+    "formal_platform_submitted": false
+  }
+}

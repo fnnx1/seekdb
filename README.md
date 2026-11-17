@@ -124,7 +124,9 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
 - **Storage layout:** row cells use 16-byte tagged values for integers,
   strings and vector references. Vector stores up to 128 MiB stay contiguous
   in memory; larger stores spill to a derived file and release their memory
-  buffer. A binary snapshot (`/data/snapshot.bin`) stores schemas and live
+  buffer. File-backed full vector scans use an independent 64 KiB read window
+  per scan thread, avoiding one `pread` per vector; sparse filtered scans retain
+  direct reads. A binary snapshot (`/data/snapshot.bin`) stores schemas and live
   rows. The CRC-protected WAL (`/data/wal.bin`) stores typed binary INSERT
   batches and SQL for other mutations. Snapshot/WAL are the source of truth;
   derived vector files and query caches are rebuilt after recovery.
@@ -137,7 +139,10 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
   distance kernel, with primary key ascending for ties. Out-of-range queries,
   large tables and unsupported query shapes retain the exhaustive scan.
   For 128D, coordinates are interleaved in blocks of eight rows, with equal
-  BIGINT filter groups stored together. AVX2 evaluates eight conservative
+  BIGINT filter groups (or VARCHAR when no non-key BIGINT exists) stored
+  together. Same-type BIGINT and VARCHAR equality filters use versioned hash
+  indexes; cross-type comparisons retain the scalar comparison semantics.
+  AVX2 evaluates eight conservative
   rejection bounds at once; other predicates gather individual row codes.
   `CREATE VECTOR INDEX` is accepted; searches always preserve exact results.
 - **Transactions:** at most one explicit transaction. Changes are applied
@@ -147,7 +152,10 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
   to the WAL and successfully `fflush`es before reporting success. With
   `MVDB_SYNC_COMMIT=1`, it additionally `fdatasync`s, then evicts synchronized
   full WAL pages while retaining the partial append page. The default mode
-  leaves WAL pages in the kernel cache and skips per-commit disk synchronization.
+  skips per-commit disk synchronization. Every additional 1 MiB it advises
+  reclamation of complete WAL pages: Linux may start writeback, retains dirty
+  pages, and releases clean pages when possible. Advice failures affect cache
+  use only; each commit still requires successful `fflush` before replying.
 - **Recovery:** on startup the snapshot is loaded and complete WAL
   transaction groups with sequence greater than the snapshot's sequence are
   replayed. A trailing incomplete record is ignored. Auto-commit statements are
@@ -169,8 +177,8 @@ available, so exact results are returned even after `CREATE VECTOR INDEX`.
   it until the next restart/compaction.
 - The snapshot duplicates the vector payload once on disk; a very large
   dataset needs disk for both the snapshot and the transient vector file.
-- Approximate indexing is not implemented; exact scans satisfy the recall
-  requirement but may rank lower on the large ANN benchmark.
+- Approximate indexing is not implemented; both protocol modes return exact
+  results. The published default performance workload also uses exact search.
 - The SQL parser covers the documented subset; vendor-specific syntax is not
   supported.
 
@@ -210,6 +218,16 @@ persistence, `SIGKILL` recovery, graceful-close rollback, error handling,
 `IF EXISTS`, `CREATE VECTOR INDEX`, and a 10k-row performance smoke test. The
 separate `tests/large_data_test.py` loads 100k x 128D, checks exact TopK,
 restarts and records peak RSS.
+`tests/spill_scan_test.py` crosses the real 128 MiB vector-store spill threshold
+and checks exact ties, filters, mutations, rollback and immediate-ACK SIGKILL
+recovery. `tests/vector_store_read_test.cpp` checks bitwise reads, odd dimensions,
+independent thread windows, append/move/reinitialization and injected short
+reads, interruptions and I/O errors under ASan/UBSan.
+
+`tests/varchar_filter_test.py` checks 494 independent exact queries, including
+string edge cases, cross-type filters, mutation invalidation and crash recovery.
+`tests/wal_cache_advice_test.py` checks WAL advice thresholds, ignored advice
+errors, strict-mode synchronization and immediate acknowledged-commit recovery.
 
 `tests/performance_bench.py` prepares requests before timing, runs sequential
 acknowledged transactions and exact searches against an independent integer
@@ -228,6 +246,11 @@ python3 tests/performance_bench.py --binary /path/to/baseline \
   --binary ./minivectordb --rounds 7 --cpus 0,1 --json /tmp/performance.json
 ```
 
+The default 10k-row workload stays in memory. For the file-backed scan path,
+use `--rows 300000 --batch 1000 --queries 100` or larger; see
+[`docs/performance/2026-11-16-file-scan.md`](docs/performance/2026-11-16-file-scan.md)
+for measured large-table results and their limits.
+
 `tests/commit_crash_test.py` additionally kills the process immediately after
 receiving each tested commit response, before decoding it or issuing a query:
 
@@ -235,3 +258,13 @@ receiving each tested commit response, before decoding it or issuing a query:
 python3 tests/commit_crash_test.py
 MVDB_SYNC_COMMIT=1 python3 tests/commit_crash_test.py
 ```
+
+The native benchmark accepts `--filter-type bigint|varchar` and `--warmup N`
+(full query passes, default 0). `tests/cgroup_performance_bench.py` uses separate
+Docker containers for writes and queries, includes page cache in `memory.peak`,
+and records per-device `io.stat` through final writeback. Its default warmup is
+one pass. Select a device explicitly with `--io-device MAJOR:MINOR`; do not sum
+parent and child device accounting. Docker forwarding, shared image/data
+devices, local vectors and cache setup differ from the formal platform, so
+these measurements do not establish an official E score. See
+[the scoring and candidate report](docs/performance/2026-11-17-score-and-candidates.md).

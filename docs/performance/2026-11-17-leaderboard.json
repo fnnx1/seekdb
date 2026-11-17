@@ -1,0 +1,112 @@
+{
+  "source_url": "https://openwebapi.oceanbase.com/api/techcamp/testplatform/playoff/leaderboard?questionId=600081&board=performance&pageNo=3&pageSize=20&rankLimit=80",
+  "retrieved_at": "2026-11-17T22:28:04.046077+08:00",
+  "question_id": 600081,
+  "provisional": true,
+  "board": "performance",
+  "resultSequence": 3502,
+  "pageNo": 3,
+  "pageSize": 20,
+  "rows": [
+    {
+      "performanceRank": 41,
+      "performance": 4979.601713,
+      "performancePoints": 20.0
+    },
+    {
+      "performanceRank": 42,
+      "performance": 4978.217244,
+      "performancePoints": 19.5
+    },
+    {
+      "performanceRank": 43,
+      "performance": 4939.451433,
+      "performancePoints": 19
+    },
+    {
+      "performanceRank": 44,
+      "performance": 4927.507023,
+      "performancePoints": 18.5
+    },
+    {
+      "performanceRank": 45,
+      "performance": 4919.510112,
+      "performancePoints": 18
+    },
+    {
+      "performanceRank": 46,
+      "performance": 4907.405981,
+      "performancePoints": 17.5
+    },
+    {
+      "performanceRank": 47,
+      "performance": 4861.288674,
+      "performancePoints": 17
+    },
+    {
+      "performanceRank": 48,
+      "performance": 4849.265308,
+      "performancePoints": 16.5
+    },
+    {
+      "performanceRank": 49,
+      "performance": 4847.020043,
+      "performancePoints": 16
+    },
+    {
+      "performanceRank": 50,
+      "performance": 4835.919331,
+      "performancePoints": 15.5
+    },
+    {
+      "performanceRank": 51,
+      "performance": 4824.874095,
+      "performancePoints": 15
+    },
+    {
+      "performanceRank": 52,
+      "performance": 4791.623241,
+      "performancePoints": 14.5
+    },
+    {
+      "performanceRank": 53,
+      "performance": 4783.900798,
+      "performancePoints": 14
+    },
+    {
+      "performanceRank": 54,
+      "performance": 4783.45179,
+      "performancePoints": 13.5
+    },
+    {
+      "performanceRank": 55,
+      "performance": 4773.803214,
+      "performancePoints": 13
+    },
+    {
+      "performanceRank": 56,
+      "performance": 4767.559778,
+      "performancePoints": 12.5
+    },
+    {
+      "performanceRank": 57,
+      "performance": 4765.090024,
+      "performancePoints": 12
+    },
+    {
+      "performanceRank": 58,
+      "performance": 4753.165069,
+      "performancePoints": 11.5
+    },
+    {
+      "performanceRank": 59,
+      "performance": 4752.453318,
+      "performancePoints": 11
+    },
+    {
+      "performanceRank": 60,
+      "performance": 4746.75333,
+      "performancePoints": 10.5
+    }
+  ]
+}

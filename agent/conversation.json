@@ -2,13 +2,13 @@
  "meta": {
   "question_id": 600081,
   "question": "轻量向量数据库（MiniVectorDB）",
-  "status": "technical_joint_record_2026-11-16",
+  "status": "technical_joint_record_2026-11-17",
   "synthetic": false,
   "language": "zh-CN",
-  "notes": "Technical learning record recovered from the actual collaboration: the student proposed the technical direction and acceptance criteria, the agent implemented and measured, and the results are actual tool/platform outputs. c21 is a student-provided verbatim reflection (2026-11-14); c22/c23 are recovered student directions; c24/c25 are the student's own optimizations (2026-11-16). Measurements use the real btrfs filesystem, never tmpfs. Durability boundary is documented: the default commit policy targets the problem's stated crash model (process termination, kernel intact), with MVDB_SYNC_COMMIT=1 as the strict per-commit fsync mode; power loss is outside the stated model. No experimental numbers are invented.",
+  "notes": "Technical learning record recovered from the actual collaboration: the student proposed the technical direction and acceptance criteria, the agent implemented and measured, and the results are actual tool/platform outputs. c21 is a student-provided verbatim reflection (2026-11-14); c22/c23 are recovered directions; c24-c27 are the student's own analyses and optimizations (2026-11-16/17). Measurements use real btrfs and, for memory/I-O, container cgroups; never tmpfs. Durability boundary follows the problem's stated crash model with MVDB_SYNC_COMMIT=1 as strict mode. No experimental numbers are invented.",
   "public_cases": "mysqltest v4 (20 cases/95 SQL); official JSONL checker handshake + 20/20 PASS on host and Docker",
   "official_driver": "STDIO_PROTOCOL.md + protocol_check; formal 29 cases (9 hidden) passed on 2026-11-11",
-  "platform_result": "2026-11-16: ae9fc6c (block scan + c24) MySQL pass, performance E=3181.770162, prompt raw 23.0 (prompt rank 25 -> 28 pts, performance rank 128 -> 0 pts, combined 53, total 648). 2026-11-16 crash-policy candidate (student optimization) is not submitted; local btrfs vs per-commit-sync baseline: write 126.07→32.16 ms (3.92x), write+query 2.47x, recovery 26.0→16.8 ms, query unchanged."
+  "platform_result": "2026-11-16: ae9fc6c MySQL pass, E=3181.770162, prompt raw 23.0 (prompt rank 25->28 pts at the time, performance rank 128 -> 0 pts). 2026-11-16: 184e413 MySQL pass, E=3323.891232, prompt raw 21.0 (did not replace ae9fc6c because the two ranking points did not improve). 2026-11-17 candidate (VARCHAR grouping + WAL page-cache advice) is not submitted; local container medians: write/query M 14.60->11.05 and 16.60->12.52 MiB, B unchanged, query T VARCHAR 1.14x (Docker), native 4.87x."
  },
  "user_prompts": [
   {
@@ -314,6 +314,30 @@
    "attempt": "默认路径在写完完整 WAL 记录与提交标记、检查 fflush 后即回 ACK；MVDB_SYNC_COMMIT=1 恢复逐提交 fdatasync；WAL 写失败保持粘性，后续 COMMIT 不得跨失败尾部确认；快照、目录同步与关闭同步保留。新增 commit_crash_test 与 commit_sync_policy_test（含 LD_PRELOAD 故障注入与 4 个启动检查点强杀）。",
    "result": "btrfs 7 轮交替中位数：写入 126.07→32.16ms（3.92x），写+查 158.89→64.45ms（2.47x），恢复就绪 26.0→16.8ms（1.55x），查询 32.82→32.29ms（1.02x，无变化），峰值 RSS 14.30MiB 不变；COMMIT 后立即 SIGKILL 的 200 行事务与 50 次自动提交均逐字段完整恢复，恢复途中再杀仍可恢复，回滚语义不变；两种模式下的官方 20/20、exact-pruning、完整 check.sh（含 Docker）全绿。",
    "student_takeaway": "持久化级别要和题面声明的故障模型对齐：进程强杀只要求数据交给内核，逐次 fsync 是为断电准备的。把边界写清楚、给出可切换的严格模式、并用强杀测试证明不丢已确认提交，比默认开着最贵的同步更有说服力。"
+  },
+  {
+   "id": "c26",
+   "role": "student",
+   "source": "student_own_analysis_2026-11-17",
+   "dimension_hint": "技术理解与迁移",
+   "content": "我发现排行榜的 E 不是简单的时间倒数：官方公式是 E = (E_写 + 2×E_查)/3，每项 E = 0.6×f(R_T) + 0.2×f(R_B) + 0.2×f(R_M)，其中 R 是基线/我们的效率比，f(R) = R/(1+R) 是饱和函数，T/B/M 还各有一个小平滑常量（1ms、1MiB）。饱和意味着任何单项加速的收益都有上界：比值乘 s 时 f 的增量最多 (√s−1)/(√s+1)。所以写入 T 快 4× 最多只值 0.2×0.333≈0.067，查询 T 快 1.5× 最多值 0.4×0.101≈0.040。我把有效权重算清楚：写入 T 0.2、查询 T 0.4、写入 B/M 各 1/15、查询 B/M 各 2/15。这解释了为什么本地综合性能提升 2× 以上，正式 E 却只涨几个百分点——瓶颈不在算法倍数，而在我优化错了权重项。",
+   "context": "从官方题面反推评分函数与权重，解释‘本地大倍数、正式小涨幅’的反常，并据此重排优化优先级。",
+   "agent_analysis": "若只盯耗时，会默认线性给分；实际 f 饱和且查询 T 权重是写入 T 的两倍，B/M 合计占 40%。因此写侧再快也只有 0.2 权重且迅速饱和，查询 T 与 B/M 才是排名主战场。",
+   "attempt": "取官方 3.3.2/3.3.3 原文核对公式与平滑常量；用导数/代数推导单项加速的 E 增量上界；把有效权重做成表格，逐项对照本地实测倍率与正式 E 变化（写入 3.9× 只 +4.5%，查询 1.43× +18%）。",
+   "result": "推导上界：写入 T 4× ≤ +0.0667 E、查询 T 1.5× ≤ +0.0404 E（官方 0–1 单位）。对照实测：查询 1.43× 带来 +18% E（与 0.4 权重同向），写入 3.9× 只 +4.5%（受 0.2 权重、饱和、平台窗口固定开销共同限制）。据此把后续精力转向查询 T 与 B/M，而不是继续压写入。",
+   "student_takeaway": "优化前先把评分函数写清楚：权重、饱和、平滑常量决定边际收益，倍数大不等于分数高。"
+  },
+  {
+   "id": "c27",
+   "role": "student",
+   "source": "student_own_optimization_2026-11-17",
+   "dimension_hint": "独立验证与质疑",
+   "content": "我进一步确认 M 不是进程 RSS，而是整个容器的 memory.peak，包含文件页缓存。这意味着 WAL 的脏页会被计入 M，而我们之前为了持久性保留的页缓存其实可以安全地提前写回再释放。我实现了：默认模式每新增约 1 MiB WAL，在成功 fflush 后对完整前缀调用 POSIX_FADV_DONTNEED；Linux 会发起写回但不会丢脏页，后续覆盖只回收已干净的页，尾页保留；不新增任何 fdatasync，strict 模式仍逐次同步。容器实测：写入 M 14.60→11.05 MiB、查询 M 16.60→12.52 MiB，B 保持 5,849,088 字节不变，写入 T 58.9→60.3ms。同时把 VARCHAR 等值过滤接进 hash index 与量化分组，原生 VARCHAR 查询 109.41→22.48ms（4.87×），但 Docker 往返把它稀释到 1.14×；BIGINT 原生化 24.58→24.08ms（1.02×），没有真实收益。",
+   "context": "发现 M 的口径包含页缓存后，用 POSIX_FADV_DONTNEED 回收 WAL 页缓存，并用容器 cgroup 实测验证 M/B/T 三项的取舍。",
+   "agent_analysis": "若 M 只算 RSS，WAL 页缓存不进 M，回收无意义；口径是容器 memory.peak 时，5.7MB WAL 的脏页会显著抬高 M。advice 在 fflush 后调用可安全释放干净页，不改变持久性语义。",
+   "attempt": "每 1 MiB WAL 触发一次整前缀 advice，保留部分尾页；新增四组 WAL advice 回归（跨门槛、完整页、重复前缀、EINVAL、strict、ACK 后立即杀、恢复计数）；VARCHAR 等值索引与量化分组；用 cgroup 容器测 T/B/M 而非只看 RSS。",
+   "result": "容器 3 轮中位：BIGINT 写入 M 14.60→11.05 MiB、查询 M 16.60→12.52 MiB，B 不变 5,849,088，写入 T 58.93→60.30ms、查询 T 131.57→123.30ms；VARCHAR 写入 M 14.91→12.54、查询 M 16.37→12.77，查询 T 145.66→127.69ms（1.14×）。原生对照：VARCHAR 查询 4.87×，BIGINT 1.02×。按饱和函数与这些本地比例，E 增量上界约 0.0235（非正式预测）。",
+   "student_takeaway": "先确认指标口径再优化：M 含页缓存时，回收干净页是真收益；但容器往返会稀释查询收益，B 不变说明别指望 I/O 分。指标之间的取舍要一起报，不能只挑好看的报。"
   }
  ],
  "experiments": [
@@ -493,13 +517,21 @@
    "command": "7-round btrfs benchmark + immediate-ACK SIGKILL + 完整 check.sh",
    "output": "write 126.07→32.16ms (3.92x), write+query 2.47x, recovery 26.0→16.8ms, query 1.02x, RSS unchanged; SIGKILL after ACK recovers 200-row tx and 50 autocommit rows exactly in both modes; kill-during-recovery and rollback verified; official 20/20 + Docker + full check passed.",
    "status": "observed"
+  },
+  {
+   "id": "e23",
+   "owner": "student",
+   "hypothesis": "M 含容器页缓存，WAL 页缓存回收可降低 M 而不损持久性",
+   "command": "container cgroup benchmark (3 rounds) + native benchmark + full check",
+   "output": "container: write M 14.60->11.05, query M 16.60->12.52 MiB, B unchanged 5,849,088, write T 58.93->60.30ms, query T BIGINT 131.57->123.30ms, VARCHAR 145.66->127.69ms (1.14x, native 4.87x); full check + Docker 20/20 passed.",
+   "status": "observed"
   }
  ],
  "platform_observations": {
   "old_record": "记录 47249429（commit 6cec8a6）状态=4（已取消），未判题",
   "new_record": "记录 47249444（commit 9720e3e）状态=2（执行成功），MySQL 正式用例通过（成功 1 / 失败 0）",
   "leaderboard": "性能 E=967.672080（性能排名 129/162，0 分）；Agent Prompt 原始分 3.0（排名 37/162，22 分）；加赛综合 22 分，总榜第 63。",
-  "latest_records": "ae9fc6c: E=3181.770162, prompt 23.0 (prompt rank 25, 28 pts; combined 53, total 648). Crash-policy candidate: verified locally (write 3.92x, immediate-ACK SIGKILL exact), not submitted.",
+  "latest_records": "ae9fc6c: E=3181.770162, prompt 23.0 (best retained row). 184e413: E=3323.891232, prompt 21.0 (higher E but lower prompt, not retained). 2026-11-17 candidate: WAL page-cache advice + VARCHAR grouping, verified locally (container cgroup), not submitted.",
   "leaderboard_2026_11_14": "prompt raw 15.5 rank 13 (34 pts); performance E=1518.604488 rank 164 (0 pts); combined rank 41; total 654."
  },
  "retrospective": [
@@ -547,6 +579,11 @@
    "id": "r9",
    "owner": "student",
    "content": "先对齐故障模型再决定持久化级别；把默认与严格模式都实现并给出强杀证据，比单纯追求便宜或单纯追求安全都更站得住。"
+  },
+  {
+   "id": "r10",
+   "owner": "student",
+   "content": "先看指标口径再看算法：M 含页缓存时回收才有效；评分函数饱和时，先优化权重大且未饱和的项（查询 T、B/M），而不是倍数最大但权重小的写入 T。"
   }
  ],
  "limitations": [
@@ -560,7 +597,8 @@
   "量化拒绝在离群点、近似并列或其他分布上可能退化到接近全扫；4M 行未跑；8a55a2f 尚未正式评测，不能把本地倍数当成正式 E 倍数。",
   "写侧在逐提交 fdatasync 的持久性约束下已接近物理下限（btrfs 92.9ms/100 次提交）；查询精确复核与拒绝点积仍是剩余成本，继续压可能只有个位数收益。",
   "块 SIMD 收益依赖数据分布（重复向量 vs 历史零簇有差异），仅 128D 走块路径；其他维度仍逐行。写侧 fdatasync 仍是持久性物理下限。",
-  "默认提交策略只覆盖题面声明的进程强杀模型：断电、内核崩溃或磁盘损坏可能丢失最近提交，需要时用 MVDB_SYNC_COMMIT=1 恢复逐提交 fdatasync。页缓存内存不计入引擎 RSS。"
+  "默认提交策略只覆盖题面声明的进程强杀模型：断电、内核崩溃或磁盘损坏可能丢失最近提交，需要时用 MVDB_SYNC_COMMIT=1 恢复逐提交 fdatasync。页缓存内存不计入引擎 RSS。",
+  "官方冻结 schema/过滤列类型、六个基线数值仍未取得；VARCHAR 收益是否命中正式负载未知，BIGINT 过滤时查询收益接近零；容器往返稀释原生查询收益；M 下降的 E 增量上界约 0.0235，不保證进入前 50。"
  ],
  "student_evidence": [
   {
@@ -851,6 +889,34 @@
    "result_evidence": {
     "pointer": "/conversations/20/result",
     "quote": "写入 126.07→32.16ms（3.92x）"
+   },
+   "expected_tier": "2.0"
+  },
+  {
+   "id": "c26",
+   "dimension": "技术理解与迁移",
+   "reason": "学生没有停在‘性能提升却没分数’的困惑，而是找到官方公式，识别出 f(R)=R/(1+R) 的饱和性质和平滑常量，推导出单项加速的 E 增量上界，并算出各指标的有效权重（写 T 0.2、查 T 0.4、B/M 0.4），再用自己的正式记录验证（查询 1.43×→+18%、写入 3.9×→+4.5%），据此改优化优先级。属于把评测口径迁移成工程决策的 2.0 档实例。",
+   "student_evidence": {
+    "pointer": "/conversations/21/content",
+    "quote": "任何单项加速的收益都有上界"
+   },
+   "result_evidence": {
+    "pointer": "/conversations/21/result",
+    "quote": "写入 T 4× ≤ +0.0667 E、查询 T 1.5× ≤ +0.0404 E"
+   },
+   "expected_tier": "2.0"
+  },
+  {
+   "id": "c27",
+   "dimension": "独立验证与质疑",
+   "reason": "学生发现 M 的口径是容器 memory.peak（含文件页缓存）而非 RSS，据此把 WAL 页缓存用 POSIX_FADV_DONTNEED 安全回收（不新增 fdatasync、不丢脏页、strict 模式保留），并用容器 cgroup 同时报 T/B/M：M 降约 3.5–4 MiB、B 不变、写入 T 略升，VARCHAR 查询原生 4.87× 但容器仅 1.14×，还给出 E 增量上界而非夸大战绩。属于“口径→设计→多维实测→诚实取舍”的 2.0 档实例。",
+   "student_evidence": {
+    "pointer": "/conversations/22/content",
+    "quote": "M 不是进程 RSS，而是整个容器的 memory.peak，包含文件页缓存"
+   },
+   "result_evidence": {
+    "pointer": "/conversations/22/result",
+    "quote": "写入 M 14.60→11.05 MiB、查询 M 16.60→12.52 MiB"
    },
    "expected_tier": "2.0"
   }

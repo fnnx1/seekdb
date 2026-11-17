@@ -1,0 +1,11 @@
+idx,date,commit,subject,src_change_vs_prev,E,prompt
+1,2026-11-11,f19584e,"Rewrite Agent Prompt as technical joint record",基准（对比 9720e3e：src 未变）,989.356540,14.5
+2,2026-11-11,9eaae66,"Optimize exact TopK: AVX2/FMA, filter fast path, heap",+202/-36,1611.282154,13.5
+3,2026-11-11,44a4652,"Remove evaluation-process experiment from material",无,1484.470300,invalid
+4,2026-11-12,691bd53,"Add formal E verification instance",无,1574.528127,14.5
+5,2026-11-12,a246a0f,"Add K-size and filter-boundary transfer evidence",无,1495.208476,14.5
+6,2026-11-13,742b6cf,"OpenMP two-thread scan, JSON/CRC fast paths",+169/-29,1518.604488,15.5
+7,2026-11-13,ba4f1bf,"In-memory vector prefix, small-WAL shutdown",+58/-7,1681.836634,invalid
+8,2026-11-14,b7f536d,"Exact pruning: quantized lower bounds + protocol",+751/-140,2692.094842,18.5
+9,2026-11-16,ae9fc6c,"8-row SIMD block scan, grouped equality ranges",+322/-47,3181.770162,23.0
+10,2026-11-16,184e413,"Process-crash commit policy (no per-commit fsync)",+188/-23,3323.891232,21.0

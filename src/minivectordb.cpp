@@ -436,6 +436,15 @@ struct Column {
 // to pread/pwrite so a large dataset does not inflate anonymous RSS.
 class VectorStore {
  public:
+  // Each scan owns its read window; parallel scans never share mutable cache.
+  struct ReadBuffer {
+    std::vector<float> data;
+    const VectorStore *owner = nullptr;
+    uint64_t epoch = 0;
+    uint64_t offset = 0;
+    size_t valid = 0;
+  };
+
   VectorStore() = default;
   ~VectorStore() { release(); }
   VectorStore(const VectorStore &) = delete;
@@ -555,6 +564,46 @@ class VectorStore {
     return scratch.data();
   }
 
+  const float *get(const Value &v, ReadBuffer &scratch,
+                   bool read_ahead = true) const {
+    const size_t bytes = (size_t)dim_ * sizeof(float);
+    if (!read_ahead) {
+      scratch.valid = 0;
+      return get(v, scratch.data);
+    }
+    if (!v.vdisk) return get(v, scratch.data);
+    if (in_mem_ || (v.voff + bytes <= mapped_ && !chunks_.empty()))
+      return get(v, scratch.data);
+    if (v.voff > end_ || bytes > end_ - v.voff)
+      throw SqlError(1105, "HY000", "vector store read out of range");
+    if (scratch.owner == this && scratch.epoch == epoch_ &&
+        v.voff >= scratch.offset && v.voff - scratch.offset <= scratch.valid &&
+        bytes <= scratch.valid - (size_t)(v.voff - scratch.offset))
+      return scratch.data.data() + (v.voff - scratch.offset) / sizeof(float);
+    const size_t window = 64u * 1024u;
+    // Start at this vector so odd dimensions do not reread a whole aligned
+    // window when one vector straddles its end.
+    const uint64_t off = v.voff;
+    const size_t size = (size_t)std::min<uint64_t>(
+        end_ - off, std::max(window, bytes));
+    scratch.valid = 0;
+    scratch.data.resize((size + sizeof(float) - 1) / sizeof(float));
+    size_t done = 0;
+    while (done < size) {
+      const ssize_t n = ::pread(fd_, (char *)scratch.data.data() + done,
+                                size - done, (off_t)(off + done));
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0)
+        throw SqlError(1105, "HY000", "vector store read failed");
+      done += (size_t)n;
+    }
+    scratch.owner = this;
+    scratch.epoch = epoch_;
+    scratch.offset = off;
+    scratch.valid = size;
+    return scratch.data.data() + (v.voff - off) / sizeof(float);
+  }
+
   Value materialize(const Value &v) const {
     if (!v.vdisk) return v;
     std::vector<float> scratch;
@@ -566,6 +615,7 @@ class VectorStore {
   }
 
   void release() {
+    ++epoch_;
     for (void *p : chunks_)
       if (p && p != MAP_FAILED) ::munmap(p, chunk_);
     chunks_.clear();
@@ -592,6 +642,7 @@ class VectorStore {
   uint64_t mapped_bytes() const { return in_mem_ ? end_ : mapped_; }
 
  private:
+  uint64_t epoch_ = 0;
   static constexpr uint64_t kMmapLimit = 64ull * 1024 * 1024;
   size_t chunk_ = 64ull * 1024 * 1024;
   int fd_ = -1;
@@ -616,6 +667,8 @@ class VectorStore {
   }
 
   void steal(VectorStore &o) noexcept {
+    ++epoch_;
+    ++o.epoch_;
     fd_ = o.fd_;
     dim_ = o.dim_;
     end_ = o.end_;
@@ -730,6 +783,7 @@ struct Table {
   VectorStore vecs;
   uint64_t version = 0;
   std::unordered_map<int64_t, std::vector<size_t>> eqidx;
+  std::unordered_map<std::string, std::vector<size_t>> eqstr;
   int eqidx_col = -1;
   uint64_t eqidx_ver = ~0ull;
   // Versioned, compact scan metadata avoids chasing three Value objects for
@@ -2362,6 +2416,7 @@ class DB {
   uint64_t seq_ = 0;
   uint64_t last_seq_ = 0;
   uint64_t wal_bytes_ = 0;
+  uint64_t wal_async_advice_at_ = 0;
   FILE *wal_ = nullptr;
   uint64_t wal_alignment_ = 0;
   bool wal_failed_ = false;
@@ -2591,6 +2646,7 @@ class DB {
       return false;
     }
     wal_bytes_ = (uint64_t)status.st_size;
+    wal_async_advice_at_ = wal_bytes_;
     wal_alignment_ = 0;
     wal_failed_ = false;
 #ifdef __linux__
@@ -2640,6 +2696,7 @@ class DB {
     if (!f) return false;
     if (std::fclose(f) != 0) return false;
     wal_bytes_ = 0;
+    wal_async_advice_at_ = 0;
     wal_alignment_ = 0;
     wal_failed_ = false;
     return true;
@@ -2656,7 +2713,26 @@ class DB {
     // buffers into the kernel before replying. Power-loss synchronization is
     // optional because the default failure model leaves the kernel running.
     if (std::fflush(wal_) != 0) return wal_failure();
-    if (!sync_commit_) return true;
+    if (!sync_commit_) {
+#ifdef POSIX_FADV_DONTNEED
+      if (wal_bytes_ - wal_async_advice_at_ >= (1ull << 20)) {
+        // Linux may start asynchronous writeback, but DONTNEED does not
+        // discard dirty pages. Revisit the complete prefix so later calls
+        // can reclaim pages that have since become clean. Retain the partial
+        // append page and treat advice failures as optional cache behavior.
+        static const long page_size = ::sysconf(_SC_PAGESIZE);
+        if (page_size > 0) {
+          const uint64_t complete_bytes =
+              wal_bytes_ - wal_bytes_ % (uint64_t)page_size;
+          if (complete_bytes)
+            ::posix_fadvise(::fileno(wal_), 0, (off_t)complete_bytes,
+                            POSIX_FADV_DONTNEED);
+        }
+        wal_async_advice_at_ = wal_bytes_;
+      }
+#endif
+      return true;
+    }
     if (::fdatasync(::fileno(wal_)) != 0) return wal_failure();
 #ifdef POSIX_FADV_DONTNEED
     // Drop durable full pages while retaining the append page.  Discarding
@@ -3443,11 +3519,14 @@ class DB {
       else
         t.quant_bias.resize(padded_count);
       t.quant_group = -1;
-      for (size_t ci = 0; ci < t.cols.size(); ++ci)
-        if ((int)ci != t.pk && t.cols[ci].type == VT_BIGINT) {
-          t.quant_group = (int)ci;
-          break;
-        }
+      for (int type : {VT_BIGINT, VT_VARCHAR}) {
+        for (size_t ci = 0; ci < t.cols.size(); ++ci)
+          if ((int)ci != t.pk && t.cols[ci].type == type) {
+            t.quant_group = (int)ci;
+            break;
+          }
+        if (t.quant_group >= 0) break;
+      }
       if (count > t.quant_order.capacity())
         std::vector<uint32_t>(count).swap(t.quant_order);
       else
@@ -3460,8 +3539,10 @@ class DB {
       if (t.quant_group >= 0)
         std::stable_sort(t.quant_order.begin(), t.quant_order.end(),
                          [&](size_t a, size_t b) {
-                           return t.rows[a].vals[t.quant_group].i <
-                                  t.rows[b].vals[t.quant_group].i;
+                           const auto &av = t.rows[a].vals[t.quant_group];
+                           const auto &bv = t.rows[b].vals[t.quant_group];
+                           if (av.type == VT_VARCHAR) return *av.str < *bv.str;
+                           return av.i < bv.i;
                          });
       for (size_t position = 0; position < count; ++position)
         t.quant_rank[t.quant_order[position]] = (uint32_t)position;
@@ -3611,23 +3692,30 @@ class DB {
     static thread_local std::vector<size_t> matches;
     matches.clear();
     if (!l2_hot || !no_filter) {
-      if (fast_col >= 0 && fast_val.type == VT_BIGINT &&
-          t.cols[(size_t)fast_col].type == VT_BIGINT) {
+      if (fast_col >= 0 && (fast_val.type == VT_BIGINT || fast_val.type == VT_VARCHAR) &&
+          t.cols[(size_t)fast_col].type == fast_val.type) {
         // Hash index for `col = literal`: the benchmark repeats the same
         // equality filter many times after the load.  Built lazily and
         // invalidated by every mutation version bump.
         if (t.eqidx_col != fast_col || t.eqidx_ver != t.version) {
           t.eqidx.clear();
+          t.eqstr.clear();
           for (size_t i = 0; i < t.rows.size(); ++i) {
             if (t.rows[i].deleted) continue;
-            const Value &v = t.rows[i].vals[(size_t)fast_col];
+            const auto &v = t.rows[i].vals[(size_t)fast_col];
             if (v.type == VT_BIGINT) t.eqidx[v.i].push_back(i);
+            else if (v.type == VT_VARCHAR) t.eqstr[*v.str].push_back(i);
           }
           t.eqidx_col = fast_col;
           t.eqidx_ver = t.version;
         }
-        auto it = t.eqidx.find(fast_val.i);
-        if (it != t.eqidx.end()) matches = it->second;
+        if (fast_val.type == VT_BIGINT) {
+          auto it = t.eqidx.find(fast_val.i);
+          if (it != t.eqidx.end()) matches = it->second;
+        } else {
+          auto it = t.eqstr.find(fast_val.s);
+          if (it != t.eqstr.end()) matches = it->second;
+        }
       } else {
         matches.reserve(t.rows.size());
         for (size_t i = 0; i < t.rows.size(); ++i) {
@@ -3758,7 +3846,7 @@ class DB {
           int quant_d;
         };
         struct ScanState {
-          std::vector<float> scratch;
+          VectorStore::ReadBuffer scratch;
           Pending pending[4];
           size_t count = 0;
         };
@@ -3809,7 +3897,9 @@ class DB {
           const bool mapped_vector = base && off + dim * sizeof(float) <= mapped;
           const float *vector_data = mapped_vector
               ? base + off / sizeof(float)
-              : t.vecs.get(t.rows[idx].vals[(size_t)vcol], state.scratch);
+              // Sparse filters retain single-vector reads to avoid reading
+              // unused coordinates between distant matches.
+              : t.vecs.get(t.rows[idx].vals[(size_t)vcol], state.scratch, no_filter);
           if (defer && mapped_vector) {
             for (size_t coord = 0; coord < dim; coord += 16)
               __builtin_prefetch(vector_data + coord, 0, 3);
@@ -3880,7 +3970,8 @@ class DB {
           if (no_filter) {
             scan_range(0, t.rows.size(), selected, code_limit, state);
           } else if (quantized && dim == 128 && batch_avx2 && fast_col >= 0 &&
-                     fast_val.type == VT_BIGINT && fast_col == t.quant_group &&
+                     (fast_val.type == VT_BIGINT || fast_val.type == VT_VARCHAR) &&
+                     t.cols[(size_t)fast_col].type == fast_val.type && fast_col == t.quant_group &&
                      !matches.empty()) {
             scan_range(t.quant_rank[matches.front()],
                        t.quant_rank[matches.back()] + 1, selected, code_limit,

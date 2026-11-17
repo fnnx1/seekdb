@@ -1,0 +1,21 @@
+{
+  "source_url": "https://openwebapi.oceanbase.com/api/techcamp/testplatform/subquestion/queryTestPlatformSubQuestionList?questionId=600081&pageNum=1&pageSize=100",
+  "retrieved_at": "2026-11-17T22:28:04.313838+08:00",
+  "question_id": 600081,
+  "subquestions": [
+    {
+      "id": 800517,
+      "questionId": 600081,
+      "subQuestionName": "性能评测",
+      "subQuestionTotalScore": 40,
+      "subQuestionDetail": "<h3>任务：实现 MiniVectorDB</h3><p>实现单机、单进程、单客户端的轻量向量数据库，同时最多一个显式事务。以公开题包和配套测试驱动为准。</p><ul><li><strong>SQL：</strong>支持建表和增删改查，支持 BIGINT 主键、VARCHAR 和固定维度 VECTOR，支持基础过滤、排序和 LIMIT。</li><li><strong>向量检索：</strong>支持 L2 距离及精确 TopK；有过滤时在满足条件的集合中取 TopK。近似索引要求以题包为准。</li><li><strong>存储和恢复：</strong>数据写入 <code>/data</code>，支持 BEGIN、COMMIT、ROLLBACK；重启后保留已确认提交的数据，未提交事务不可部分生效。</li><li><strong>运行：</strong>Linux x86_64 容器前台运行，经 stdin 接收 SQL、stdout 返回评测结果，日志写 stderr，不启动网络监听服务。核心存储、查询、索引与事务须自行实现。</li></ul><h3>如何计分</h3><p>MySQL 正式用例全部通过后才参与两项排名，MySQL 用例本身不计分。评测批量写入与向量 TopK，按题包口径综合耗时、磁盘 I/O 和峰值内存，计算原始性能指标。有效原始指标按从高到低排名，第一名 40 分，每往后一名减 0.5 分，最低 0 分；并列同分，后续名次跳过并列人数。性能无效不占性能榜名次。</p><p>按赛题介绍准备材料，整题只需提测一次；性能和 Agent Prompt 评价使用同一次提交的材料。</p><p><br></p><p>具体内容可以参考： <a href=\"https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/lg8enxlmwg69unt6\" target=\"_blank\">https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/lg8enxlmwg69unt6</a> </p>"
+    },
+    {
+      "id": 800518,
+      "questionId": 600081,
+      "subQuestionName": "Agent Prompt 评价",
+      "subQuestionTotalScore": 40,
+      "subQuestionDetail": "<h3>提交 Agent Prompt 学习材料</h3><p>按题包要求在同一次提交中提供 Agent Prompt 文件，展示问题理解与学习规划、Prompt 设计与迭代、验证纠错与独立判断、总结复盘与知识迁移。提交真实、可核验的学习记录；不按对话数量或 Token 消耗给分，不要提交密钥。</p><h3>如何计分</h3><p>MySQL 正式用例全部通过后，有效材料按原始评价分独立排名。第一名 40 分，每往后一名减 0.5 分，最低 0 分；并列同分，后续名次跳过并列人数。材料未提交、不可读或无有效学习内容时，本项为 0 分，不占本项名次，不影响有效的性能成绩。</p><p>与性能评测共用同一次提测，无需单独提交。</p><p><br></p><p>具体内容可以参考： <a href=\"https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/lg8enxlmwg69unt6\" target=\"_blank\">https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/lg8enxlmwg69unt6</a> </p>"
+    }
+  ]
+}

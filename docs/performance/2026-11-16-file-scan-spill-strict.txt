@@ -1,0 +1,10 @@
+PASS initial real-threshold spill
+PASS autocommit updates and deletes after spill
+PASS transaction visibility and failed multirow atomicity
+PASS rollback restores spilled vector references
+PASS failed autocommit has no partial row
+PASS mixed transaction before durable acknowledgement
+PASS commit ACK kill and interrupted-ready recovery
+PASS uncommitted spill mutations discarded on second recovery
+PASS normal shutdown and final repeated recovery
+PASS spill_integration_test: real 128 MiB spill, exact ties/filters/offsets, atomicity, rollback, ACK SIGKILL, and repeated recovery

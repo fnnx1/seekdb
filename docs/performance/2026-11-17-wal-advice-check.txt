@@ -1,0 +1,5 @@
+PASS WAL cache advice: mode=default, advice_error=False, partial_tail=False
+PASS WAL cache advice: mode=default, advice_error=True, partial_tail=False
+PASS WAL cache advice: mode=strict, advice_error=True, partial_tail=False
+PASS WAL cache advice: mode=default, advice_error=True, partial_tail=True
+PASS wal_cache_advice_test: threshold, prefix/page bounds, sync policy, advice errors, ACK-SIGKILL recovery and truncate/reopen

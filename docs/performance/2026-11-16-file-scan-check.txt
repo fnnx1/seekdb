@@ -1,0 +1,132 @@
+== clean build ==
+rm -f minivectordb
+g++ -O2 -std=c++17 -Wall -Wextra -Wno-unused-parameter -fopenmp -o minivectordb src/minivectordb.cpp
+== legacy dynamic tests ==
+PASS test_basic_vector_ties           0.01s
+PASS test_close_rollback              0.35s
+PASS test_crash                       1.06s
+PASS test_describe                    0.00s
+PASS test_errors_schema               0.00s
+PASS test_filtered_ties               0.00s
+PASS test_if_exists_index             0.00s
+PASS test_in_between_not              0.01s
+PASS test_index_maintenance           0.01s
+PASS test_like_filter                 0.00s
+  perf smoke: write 0.22s, 100 queries 0.34s
+PASS test_performance_smoke           0.58s
+PASS test_restart                     0.00s
+PASS test_show_tables_and_truncate    0.01s
+PASS test_tx                          0.01s
+PASS test_update_affected_rows        0.00s
+PASS test_update_delete_limit         0.00s
+PASS test_update_delete_order_limit   0.00s
+PASS test_vector_crash_and_restart    1.41s
+PASS test_vector_update_rollback_restart 0.01s
+ALL TESTS PASSED (19)
+== exact pruning regression ==
+PASS exact_pruning_test: exact TopK, ties, float scales, cache invalidation, survivor batches
+== SELECT template regression ==
+PASS 440 SELECT template parsing, eviction, errors and schema changes
+== durable WAL alignment and recovery ==
+PASS WAL CRC, 15 commit truncations and unpadded legacy replay (NOCOW)
+PASS 12 SIGKILL/shutdown restarts, confirmed commits, rollback and abandoned transactions
+PASS /dev/shm unpadded filesystem fallback and SIGKILL recovery
+== immediate acknowledged-commit crash recovery ==
+PASS commit_crash_test: tiny 200-row commit, 8 autocommit crash cycles, failed/uncommitted work, recovery-ready crashes; MVDB_SYNC_COMMIT=0
+PASS commit_crash_test: tiny 200-row commit, 8 autocommit crash cycles, failed/uncommitted work, recovery-ready crashes; MVDB_SYNC_COMMIT=1
+== commit synchronization policy and interrupted checkpoints ==
+PASS default commits skip WAL fdatasync and survive immediate SIGKILL
+PASS strict reports first failure and rejects later COMMIT
+PASS flush-error reports first failure and rejects later COMMIT
+PASS SIGKILL at startup checkpoint snapshot_rename_before
+PASS SIGKILL at startup checkpoint snapshot_rename_after
+PASS SIGKILL at startup checkpoint wal_truncate_before
+PASS SIGKILL at startup checkpoint wal_truncate_after
+== legacy protocol tests ==
+PASS test_bigint_min_and_max
+PASS test_comments_and_crlf
+PASS test_database_use_and_empty_statements
+PASS test_error_then_continue
+PASS test_exit_and_eof
+PASS test_multiple_statements_one_line
+PASS test_no_trailing_semicolon_and_select_constant
+PASS test_semicolon_in_string_and_comment
+ALL PROTOCOL TESTS PASSED (8)
+== fuzz smoke ==
+PASS fuzz_smoke: 20000 random statements, no crash
+== large-data smoke ==
+PASS large_data_test: 100000 rows, peak RSS 87.6 MB
+== file-backed scan transactions and crash recovery ==
+PASS initial real-threshold spill
+PASS autocommit updates and deletes after spill
+PASS transaction visibility and failed multirow atomicity
+PASS rollback restores spilled vector references
+PASS failed autocommit has no partial row
+PASS mixed transaction before durable acknowledgement
+PASS commit ACK kill and interrupted-ready recovery
+PASS uncommitted spill mutations discarded on second recovery
+PASS normal shutdown and final repeated recovery
+PASS spill_integration_test: real 128 MiB spill, exact ties/filters/offsets, atomicity, rollback, ACK SIGKILL, and repeated recovery
+== ASan/UBSan legacy tests ==
+PASS test_basic_vector_ties           0.08s
+PASS test_close_rollback              0.39s
+PASS test_crash                       1.10s
+PASS test_describe                    0.04s
+PASS test_errors_schema               0.03s
+PASS test_filtered_ties               0.03s
+PASS test_if_exists_index             0.02s
+PASS test_in_between_not              0.08s
+PASS test_index_maintenance           0.08s
+PASS test_like_filter                 0.04s
+  perf smoke: write 2.41s, 100 queries 3.56s
+PASS test_performance_smoke           5.99s
+PASS test_restart                     0.04s
+PASS test_show_tables_and_truncate    0.09s
+PASS test_tx                          0.08s
+PASS test_update_affected_rows        0.07s
+PASS test_update_delete_limit         0.05s
+PASS test_update_delete_order_limit   0.05s
+PASS test_vector_crash_and_restart    1.47s
+PASS test_vector_update_rollback_restart 0.06s
+ALL TESTS PASSED (19)
+PASS exact_pruning_test: exact TopK, ties, float scales, cache invalidation, survivor batches
+PASS 440 SELECT template parsing, eviction, errors and schema changes
+PASS WAL CRC, 15 commit truncations and unpadded legacy replay (NOCOW)
+PASS 12 SIGKILL/shutdown restarts, confirmed commits, rollback and abandoned transactions
+PASS /dev/shm unpadded filesystem fallback and SIGKILL recovery
+== ASan/UBSan quantized dot product tests ==
+PASS quant_dot_test: exact integer dots, extrema, tails, unaligned inputs
+== ASan/UBSan SIMD lanes and decimal parser ==
+PASS SIMD lane distances, inclusive masks and decimal parsing
+== ASan/UBSan compact cell ownership and snapshot tests ==
+PASS compact stored value ownership and varchar/vector snapshot reload
+== ASan/UBSan file-backed read windows ==
+PASS real spill, bitwise reads, odd dimensions, append, mode switching, move, reinit and independent thread windows
+== optional clang-tidy ==
+== official JSONL handshake (host) ==
+handshake: PASS 
+Report: protocol-results/check-host-handshake/result.json
+== official JSONL public cases (host) ==
+sql_crud: PASS 
+sql_comparisons: PASS 
+sql_ordering: PASS 
+sql_empty: PASS 
+sql_primary_key: PASS 
+sql_unicode: PASS 
+sql_bigint: PASS 
+sql_unsupported: PASS 
+storage_restart: PASS 
+vector_euclidean: PASS 
+transaction_commit: PASS 
+transaction_rollback: PASS 
+storage_mutations: PASS 
+storage_multiple_tables: PASS 
+vector_ties_and_filter: PASS 
+vector_float32: PASS 
+vector_index_maintenance: PASS 
+transaction_failed_insert: PASS 
+transaction_autocommit_atomic: PASS 
+transaction_shutdown_rollback: PASS 
+Report: protocol-results/check-host-public/result.json
+== whitespace/static check ==
+ALL CHECKS PASSED

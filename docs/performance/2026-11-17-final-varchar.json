@@ -1,0 +1,562 @@
+{
+  "workload": {
+    "rows": 10000,
+    "dims": 128,
+    "queries": 1000,
+    "batch": 100,
+    "commits": 100,
+    "groups": 10,
+    "k": 10,
+    "seed": 20261114,
+    "filter_type": "varchar",
+    "warmup": 1,
+    "warmup_queries": 1000,
+    "warmup_included_in_measured_t": false,
+    "engine_cpus": [
+      0,
+      1
+    ],
+    "driver_cpus": [
+      2
+    ],
+    "dataset": "random-dyadic-float32",
+    "tied_vectors": "copies",
+    "data_parent": "/home/asta/Documents/projects/OceanBase/round2",
+    "data_filesystem": "btrfs",
+    "mode": "exact",
+    "requests_preencoded": true,
+    "requested_commit_sync": false,
+    "crash_test": "SIGKILL-with-kernel-alive",
+    "power_loss_tested": false
+  },
+  "preparation_s": 0.3886681839994708,
+  "oracle_s": 0.23179768299996795,
+  "binaries": {
+    "/tmp/mvdb-next-j158e0c2/baseline": {
+      "median": {
+        "write_s": 0.02955313699931139,
+        "filtered_s": 0.09426711499963858,
+        "unfiltered_s": 0.014621491000070819,
+        "query_s": 0.10940952499913692,
+        "total_s": 0.14037332800126023,
+        "lifecycle_s": 0.27860870999757026,
+        "engine_peak_rss_bytes": 15544320,
+        "startup_s": 0.004882483000073989,
+        "schema_s": 6.118399960541865e-05,
+        "recovery_s": 0.018453091000083077,
+        "shutdown_s": 0.001118299999689043,
+        "warmup_s": 0.111266083999908
+      },
+      "rounds": [
+        {
+          "write_s": 0.029488694000065152,
+          "filtered_s": 0.09463637600038055,
+          "unfiltered_s": 0.01624825800081453,
+          "query_s": 0.11088463400119508,
+          "total_s": 0.14037332800126023,
+          "lifecycle_s": 0.27909492600247177,
+          "engine_peak_rss_bytes": 15556608,
+          "startup_s": 0.007578753000416327,
+          "schema_s": 6.134200066298945e-05,
+          "recovery_s": 0.01869010900009016,
+          "shutdown_s": 0.00112531000013405,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.111266083999908,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        },
+        {
+          "write_s": 0.02955313699931139,
+          "filtered_s": 0.08382528899983299,
+          "unfiltered_s": 0.014621491000070819,
+          "query_s": 0.09844677999990381,
+          "total_s": 0.1279999169992152,
+          "lifecycle_s": 0.2528753759988831,
+          "engine_peak_rss_bytes": 15544320,
+          "startup_s": 0.004729494999992312,
+          "schema_s": 5.5051000344974454e-05,
+          "recovery_s": 0.017713223999635375,
+          "shutdown_s": 0.001118299999689043,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.1012593890000062,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        },
+        {
+          "write_s": 0.031389603999741666,
+          "filtered_s": 0.09426711499963858,
+          "unfiltered_s": 0.01514240999949834,
+          "query_s": 0.10940952499913692,
+          "total_s": 0.1407991289988786,
+          "lifecycle_s": 0.27860870999757026,
+          "engine_peak_rss_bytes": 15495168,
+          "startup_s": 0.004882483000073989,
+          "schema_s": 6.13409993093228e-05,
+          "recovery_s": 0.020727762999740662,
+          "shutdown_s": 0.0011158039997098967,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.1110221899998578,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        },
+        {
+          "write_s": 0.029572409999673255,
+          "filtered_s": 0.09334780999961367,
+          "unfiltered_s": 0.014076312999350193,
+          "query_s": 0.10742412299896387,
+          "total_s": 0.13699653299863712,
+          "lifecycle_s": 0.27363720599896624,
+          "engine_peak_rss_bytes": 15523840,
+          "startup_s": 0.004962985999554803,
+          "schema_s": 5.8946000535797793e-05,
+          "recovery_s": 0.017226453000148467,
+          "shutdown_s": 0.001117130999773508,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.11327515700031654,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        },
+        {
+          "write_s": 0.029345435999857727,
+          "filtered_s": 0.10737119699933828,
+          "unfiltered_s": 0.014365717000146105,
+          "query_s": 0.12173691399948439,
+          "total_s": 0.1510823499993421,
+          "lifecycle_s": 0.28733442299926537,
+          "engine_peak_rss_bytes": 15544320,
+          "startup_s": 0.004743272000268917,
+          "schema_s": 6.118399960541865e-05,
+          "recovery_s": 0.018453091000083077,
+          "shutdown_s": 0.0011264730001130374,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.11186805299985281,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        }
+      ]
+    },
+    "/home/asta/Documents/projects/OceanBase/round2/minivectordb": {
+      "median": {
+        "write_s": 0.030503633999614976,
+        "filtered_s": 0.008069572999374941,
+        "unfiltered_s": 0.015275584999471903,
+        "query_s": 0.023070331999406335,
+        "total_s": 0.05321128299965494,
+        "lifecycle_s": 0.10622300099839777,
+        "engine_peak_rss_bytes": 15564800,
+        "startup_s": 0.004778286000146181,
+        "schema_s": 6.117399971117266e-05,
+        "recovery_s": 0.018175763999352057,
+        "shutdown_s": 0.0011242840000704746,
+        "warmup_s": 0.02782858699993085
+      },
+      "rounds": [
+        {
+          "write_s": 0.031005843999992067,
+          "filtered_s": 0.008940256000641966,
+          "unfiltered_s": 0.01611747400056629,
+          "query_s": 0.025057730001208256,
+          "total_s": 0.05606357400120032,
+          "lifecycle_s": 0.10726982000142016,
+          "engine_peak_rss_bytes": 15560704,
+          "startup_s": 0.004778286000146181,
+          "schema_s": 8.78569999258616e-05,
+          "recovery_s": 0.01772511699982715,
+          "shutdown_s": 0.0011351880002621328,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.02747979800005851,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        },
+        {
+          "write_s": 0.030979137999565864,
+          "filtered_s": 0.008129579000524245,
+          "unfiltered_s": 0.014102565999564831,
+          "query_s": 0.022232145000089076,
+          "total_s": 0.05321128299965494,
+          "lifecycle_s": 0.10622300099839777,
+          "engine_peak_rss_bytes": 15572992,
+          "startup_s": 0.004719233000287204,
+          "schema_s": 5.538400000659749e-05,
+          "recovery_s": 0.018175763999352057,
+          "shutdown_s": 0.0011188449998371652,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.0289424919992598,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        },
+        {
+          "write_s": 0.03047050399982254,
+          "filtered_s": 0.00743986900033633,
+          "unfiltered_s": 0.013692241000171634,
+          "query_s": 0.021132110000507964,
+          "total_s": 0.051602614000330504,
+          "lifecycle_s": 0.10340040400024009,
+          "engine_peak_rss_bytes": 15515648,
+          "startup_s": 0.004836381000131951,
+          "schema_s": 7.168100000853883e-05,
+          "recovery_s": 0.019794169000306283,
+          "shutdown_s": 0.0011131040000691428,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.025982454999393667,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        },
+        {
+          "write_s": 0.02974060699943948,
+          "filtered_s": 0.007794746999934432,
+          "unfiltered_s": 0.015275584999471903,
+          "query_s": 0.023070331999406335,
+          "total_s": 0.05281093899884581,
+          "lifecycle_s": 0.10471319199768914,
+          "engine_peak_rss_bytes": 15581184,
+          "startup_s": 0.004769430999658653,
+          "schema_s": 5.76959992031334e-05,
+          "recovery_s": 0.018122254999980214,
+          "shutdown_s": 0.0011242840000704746,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.02782858699993085,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        },
+        {
+          "write_s": 0.030503633999614976,
+          "filtered_s": 0.008069572999374941,
+          "unfiltered_s": 0.015889973000412283,
+          "query_s": 0.023959545999787224,
+          "total_s": 0.0544631799994022,
+          "lifecycle_s": 0.10834956700000475,
+          "engine_peak_rss_bytes": 15564800,
+          "startup_s": 0.005094543000268459,
+          "schema_s": 6.117399971117266e-05,
+          "recovery_s": 0.01906126999983826,
+          "shutdown_s": 0.0011256220004725037,
+          "write_io": {
+            "rchar": 9828797,
+            "wchar": 5742594,
+            "syscr": 400,
+            "syscw": 600,
+            "read_bytes": 0,
+            "write_bytes": 5734400,
+            "cancelled_write_bytes": 0
+          },
+          "warmup_s": 0.02854377800031216,
+          "warmup_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 1081823,
+            "wchar": 116155,
+            "syscr": 1000,
+            "syscw": 1000,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 5738496
+          },
+          "warmup_queries_verified": 1000,
+          "exact_queries_verified": 1000,
+          "recovery_queries_verified": 1000,
+          "result_sha256": "3ec412914abdb19b9df177d17f580830f623fa809b36fc544f2079db286e25fa"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,61 @@
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  13.37MB
+Step 1/10 : FROM ubuntu:24.04
+ ---> 24737cef17f4
+Step 2/10 : ENV DEBIAN_FRONTEND=noninteractive
+ ---> Using cache
+ ---> 54a089388dba
+Step 3/10 : RUN apt-get update     && apt-get install -y --no-install-recommends g++ make ca-certificates     && rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> d8d74ea4de99
+Step 4/10 : WORKDIR /app
+ ---> Using cache
+ ---> a180fca25b84
+Step 5/10 : COPY Makefile ./
+ ---> Using cache
+ ---> a417f5bbd527
+Step 6/10 : COPY src ./src
+ ---> 18229a0b31b6
+Step 7/10 : RUN make
+ ---> Running in f13ba39682b7
+g++ -O2 -std=c++17 -Wall -Wextra -Wno-unused-parameter -fopenmp -o minivectordb src/minivectordb.cpp
+ ---> Removed intermediate container f13ba39682b7
+ ---> 366f5fd2e9cf
+Step 8/10 : RUN mkdir -p /data
+ ---> Running in 01e2d6812f76
+ ---> Removed intermediate container 01e2d6812f76
+ ---> dde3c8297f54
+Step 9/10 : VOLUME ["/data"]
+ ---> Running in 0feb1afa975a
+ ---> Removed intermediate container 0feb1afa975a
+ ---> 0c231ceb0164
+Step 10/10 : ENTRYPOINT ["/app/minivectordb"]
+ ---> Running in 8dabf304a976
+ ---> Removed intermediate container 8dabf304a976
+ ---> 17487e106b05
+Successfully built 17487e106b05
+Successfully tagged minivectordb:check
+sql_crud: PASS 
+sql_comparisons: PASS 
+sql_ordering: PASS 
+sql_empty: PASS 
+sql_primary_key: PASS 
+sql_unicode: PASS 
+sql_bigint: PASS 
+sql_unsupported: PASS 
+storage_restart: PASS 
+vector_euclidean: PASS 
+transaction_commit: PASS 
+transaction_rollback: PASS 
+storage_mutations: PASS 
+storage_multiple_tables: PASS 
+vector_ties_and_filter: PASS 
+vector_float32: PASS 
+vector_index_maintenance: PASS 
+transaction_failed_insert: PASS 
+transaction_autocommit_atomic: PASS 
+transaction_shutdown_rollback: PASS 
+Report: protocol-results/check-docker-20261117/result.json

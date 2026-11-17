@@ -1,0 +1,112 @@
+diff --git a/src/minivectordb.cpp b/src/minivectordb.cpp
+index e5a3fef..a90b23f 100644
+--- a/src/minivectordb.cpp
++++ b/src/minivectordb.cpp
+@@ -436,6 +436,15 @@ struct Column {
+ // to pread/pwrite so a large dataset does not inflate anonymous RSS.
+ class VectorStore {
+  public:
++  // Each scan owns its read window; parallel scans never share mutable cache.
++  struct ReadBuffer {
++    std::vector<float> data;
++    const VectorStore *owner = nullptr;
++    uint64_t epoch = 0;
++    uint64_t offset = 0;
++    size_t valid = 0;
++  };
++
+   VectorStore() = default;
+   ~VectorStore() { release(); }
+   VectorStore(const VectorStore &) = delete;
+@@ -555,6 +564,46 @@ class VectorStore {
+     return scratch.data();
+   }
+ 
++  const float *get(const Value &v, ReadBuffer &scratch,
++                   bool read_ahead = true) const {
++    const size_t bytes = (size_t)dim_ * sizeof(float);
++    if (!read_ahead) {
++      scratch.valid = 0;
++      return get(v, scratch.data);
++    }
++    if (!v.vdisk) return get(v, scratch.data);
++    if (in_mem_ || (v.voff + bytes <= mapped_ && !chunks_.empty()))
++      return get(v, scratch.data);
++    if (v.voff > end_ || bytes > end_ - v.voff)
++      throw SqlError(1105, "HY000", "vector store read out of range");
++    if (scratch.owner == this && scratch.epoch == epoch_ &&
++        v.voff >= scratch.offset && v.voff - scratch.offset <= scratch.valid &&
++        bytes <= scratch.valid - (size_t)(v.voff - scratch.offset))
++      return scratch.data.data() + (v.voff - scratch.offset) / sizeof(float);
++    const size_t window = 64u * 1024u;
++    // Start at this vector so odd dimensions do not reread a whole aligned
++    // window when one vector straddles its end.
++    const uint64_t off = v.voff;
++    const size_t size = (size_t)std::min<uint64_t>(
++        end_ - off, std::max(window, bytes));
++    scratch.valid = 0;
++    scratch.data.resize((size + sizeof(float) - 1) / sizeof(float));
++    size_t done = 0;
++    while (done < size) {
++      const ssize_t n = ::pread(fd_, (char *)scratch.data.data() + done,
++                                size - done, (off_t)(off + done));
++      if (n < 0 && errno == EINTR) continue;
++      if (n <= 0)
++        throw SqlError(1105, "HY000", "vector store read failed");
++      done += (size_t)n;
++    }
++    scratch.owner = this;
++    scratch.epoch = epoch_;
++    scratch.offset = off;
++    scratch.valid = size;
++    return scratch.data.data() + (v.voff - off) / sizeof(float);
++  }
++
+   Value materialize(const Value &v) const {
+     if (!v.vdisk) return v;
+     std::vector<float> scratch;
+@@ -566,6 +615,7 @@ class VectorStore {
+   }
+ 
+   void release() {
++    ++epoch_;
+     for (void *p : chunks_)
+       if (p && p != MAP_FAILED) ::munmap(p, chunk_);
+     chunks_.clear();
+@@ -592,6 +642,7 @@ class VectorStore {
+   uint64_t mapped_bytes() const { return in_mem_ ? end_ : mapped_; }
+ 
+  private:
++  uint64_t epoch_ = 0;
+   static constexpr uint64_t kMmapLimit = 64ull * 1024 * 1024;
+   size_t chunk_ = 64ull * 1024 * 1024;
+   int fd_ = -1;
+@@ -616,6 +667,8 @@ class VectorStore {
+   }
+ 
+   void steal(VectorStore &o) noexcept {
++    ++epoch_;
++    ++o.epoch_;
+     fd_ = o.fd_;
+     dim_ = o.dim_;
+     end_ = o.end_;
+@@ -3758,7 +3811,7 @@ class DB {
+           int quant_d;
+         };
+         struct ScanState {
+-          std::vector<float> scratch;
++          VectorStore::ReadBuffer scratch;
+           Pending pending[4];
+           size_t count = 0;
+         };
+@@ -3809,7 +3862,9 @@ class DB {
+           const bool mapped_vector = base && off + dim * sizeof(float) <= mapped;
+           const float *vector_data = mapped_vector
+               ? base + off / sizeof(float)
+-              : t.vecs.get(t.rows[idx].vals[(size_t)vcol], state.scratch);
++              // Sparse filters retain single-vector reads to avoid reading
++              // unused coordinates between distant matches.
++              : t.vecs.get(t.rows[idx].vals[(size_t)vcol], state.scratch, no_filter);
+           if (defer && mapped_vector) {
+             for (size_t coord = 0; coord < dim; coord += 16)
+               __builtin_prefetch(vector_data + coord, 0, 3);

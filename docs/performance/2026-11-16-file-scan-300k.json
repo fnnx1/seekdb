@@ -1,0 +1,467 @@
+{
+  "workload": {
+    "rows": 300000,
+    "dims": 128,
+    "queries": 100,
+    "batch": 1000,
+    "commits": 300,
+    "groups": 10,
+    "k": 10,
+    "seed": 20261114,
+    "engine_cpus": [
+      0,
+      1
+    ],
+    "driver_cpus": [
+      2
+    ],
+    "dataset": "random-dyadic-float32",
+    "tied_vectors": "copies",
+    "data_parent": "/home/asta/Documents/projects/OceanBase/round2",
+    "data_filesystem": "btrfs",
+    "mode": "exact",
+    "requests_preencoded": true,
+    "requested_commit_sync": false,
+    "crash_test": "SIGKILL-with-kernel-alive",
+    "power_loss_tested": false
+  },
+  "preparation_s": 11.172427322002477,
+  "oracle_s": 1.0236741780026932,
+  "binaries": {
+    "/tmp/mvdb-process-crash-8gys7_k8/candidate": {
+      "median": {
+        "write_s": 0.9613318689953303,
+        "filtered_s": 0.5851800750024267,
+        "unfiltered_s": 2.379630306000763,
+        "query_s": 2.96481038100319,
+        "total_s": 3.923779879005451,
+        "lifecycle_s": 4.516392172998167,
+        "engine_peak_rss_bytes": 181092352,
+        "startup_s": 0.019175608998921234,
+        "schema_s": 6.294000195339322e-05,
+        "recovery_s": 0.48127313300210517,
+        "shutdown_s": 0.09869115799665451
+      },
+      "rounds": [
+        {
+          "write_s": 0.9756685819957056,
+          "filtered_s": 0.5707620689936448,
+          "unfiltered_s": 2.2479184170006192,
+          "query_s": 2.818680485994264,
+          "total_s": 3.7943490679899696,
+          "lifecycle_s": 4.39147540400154,
+          "engine_peak_rss_bytes": 181084160,
+          "startup_s": 0.02039339399925666,
+          "schema_s": 6.646800466114655e-05,
+          "recovery_s": 0.4781307450029999,
+          "shutdown_s": 0.09853572900465224,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448107757,
+            "wchar": 13375,
+            "syscr": 16500100,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        },
+        {
+          "write_s": 0.9589694980022614,
+          "filtered_s": 0.5851800750024267,
+          "unfiltered_s": 2.379630306000763,
+          "query_s": 2.96481038100319,
+          "total_s": 3.923779879005451,
+          "lifecycle_s": 4.516392172998167,
+          "engine_peak_rss_bytes": 181321728,
+          "startup_s": 0.019175608998921234,
+          "schema_s": 6.267400021897629e-05,
+          "recovery_s": 0.47402560699993046,
+          "shutdown_s": 0.09934840399364475,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448107757,
+            "wchar": 13375,
+            "syscr": 16500100,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        },
+        {
+          "write_s": 0.9613318689953303,
+          "filtered_s": 0.578295708000951,
+          "unfiltered_s": 2.414670534002653,
+          "query_s": 2.992966242003604,
+          "total_s": 3.954298110998934,
+          "lifecycle_s": 4.55329162900307,
+          "engine_peak_rss_bytes": 181092352,
+          "startup_s": 0.018957781001518015,
+          "schema_s": 7.144600385800004e-05,
+          "recovery_s": 0.48127313300210517,
+          "shutdown_s": 0.09869115799665451,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448107757,
+            "wchar": 13375,
+            "syscr": 16500100,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        },
+        {
+          "write_s": 0.9970356560006621,
+          "filtered_s": 0.6318484400035231,
+          "unfiltered_s": 2.400070860996493,
+          "query_s": 3.0319193010000163,
+          "total_s": 4.028954957000678,
+          "lifecycle_s": 4.572235501014802,
+          "engine_peak_rss_bytes": 181211136,
+          "startup_s": 0.01978322800277965,
+          "schema_s": 6.294000195339322e-05,
+          "recovery_s": 0.48989171500579687,
+          "shutdown_s": 0.03354266100359382,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448107757,
+            "wchar": 13375,
+            "syscr": 16500100,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        },
+        {
+          "write_s": 0.956141488000867,
+          "filtered_s": 0.6151946960017085,
+          "unfiltered_s": 2.2756760260017472,
+          "query_s": 2.8908707220034557,
+          "total_s": 3.8470122100043227,
+          "lifecycle_s": 4.476403370004846,
+          "engine_peak_rss_bytes": 181080064,
+          "startup_s": 0.018906956996943336,
+          "schema_s": 5.6208999012596905e-05,
+          "recovery_s": 0.50999430900265,
+          "shutdown_s": 0.10043368500191718,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448107757,
+            "wchar": 13375,
+            "syscr": 16500100,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        }
+      ]
+    },
+    "/tmp/mvdb-scale-k_8vf014/final": {
+      "median": {
+        "write_s": 0.9595505149991368,
+        "filtered_s": 0.5691645900005824,
+        "unfiltered_s": 0.4147343189979438,
+        "query_s": 0.9838989089985262,
+        "total_s": 1.943449423997663,
+        "lifecycle_s": 2.5515517450112384,
+        "engine_peak_rss_bytes": 181268480,
+        "startup_s": 0.021402852995379362,
+        "schema_s": 6.826900062151253e-05,
+        "recovery_s": 0.48155622700141976,
+        "shutdown_s": 0.10073161299806088
+      },
+      "rounds": [
+        {
+          "write_s": 0.9500209139951039,
+          "filtered_s": 0.5617397280002479,
+          "unfiltered_s": 0.4069240169992554,
+          "query_s": 0.9686637449995033,
+          "total_s": 1.9186846589946072,
+          "lifecycle_s": 2.5084715879929718,
+          "engine_peak_rss_bytes": 181182464,
+          "startup_s": 0.01882259400008479,
+          "schema_s": 6.403099541785195e-05,
+          "recovery_s": 0.4701686910048011,
+          "shutdown_s": 0.10073161299806088,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448517357,
+            "wchar": 13375,
+            "syscr": 1617300,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        },
+        {
+          "write_s": 0.9595505149991368,
+          "filtered_s": 0.5691645900005824,
+          "unfiltered_s": 0.4147343189979438,
+          "query_s": 0.9838989089985262,
+          "total_s": 1.943449423997663,
+          "lifecycle_s": 2.54685220799729,
+          "engine_peak_rss_bytes": 181039104,
+          "startup_s": 0.021683211001800373,
+          "schema_s": 6.898799620103091e-05,
+          "recovery_s": 0.48155622700141976,
+          "shutdown_s": 0.10009435800020583,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448517357,
+            "wchar": 13375,
+            "syscr": 1617300,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        },
+        {
+          "write_s": 0.9531847480029683,
+          "filtered_s": 0.5550322369963396,
+          "unfiltered_s": 0.4124735510049504,
+          "query_s": 0.9675057880012901,
+          "total_s": 1.9206905360042583,
+          "lifecycle_s": 2.5515517450112384,
+          "engine_peak_rss_bytes": 181346304,
+          "startup_s": 0.050685911999607924,
+          "schema_s": 0.00015700200310675427,
+          "recovery_s": 0.4768841240002075,
+          "shutdown_s": 0.10313417100405786,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448517357,
+            "wchar": 13375,
+            "syscr": 1617300,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        },
+        {
+          "write_s": 0.9928498230001424,
+          "filtered_s": 0.6183803970052395,
+          "unfiltered_s": 0.4194279280054616,
+          "query_s": 1.037808325010701,
+          "total_s": 2.0306581480108434,
+          "lifecycle_s": 2.6455418760015164,
+          "engine_peak_rss_bytes": 181460992,
+          "startup_s": 0.021402852995379362,
+          "schema_s": 6.338000093819574e-05,
+          "recovery_s": 0.4896084840002004,
+          "shutdown_s": 0.10380901099415496,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448517357,
+            "wchar": 13375,
+            "syscr": 1617300,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        },
+        {
+          "write_s": 0.9970255310036009,
+          "filtered_s": 0.5940606939984718,
+          "unfiltered_s": 0.42376205199980177,
+          "query_s": 1.0178227459982736,
+          "total_s": 2.0148482770018745,
+          "lifecycle_s": 2.6214150600062567,
+          "engine_peak_rss_bytes": 181268480,
+          "startup_s": 0.019219132998841815,
+          "schema_s": 6.826900062151253e-05,
+          "recovery_s": 0.4870107420065324,
+          "shutdown_s": 0.10026863899838645,
+          "write_io": {
+            "rchar": 311903305,
+            "wchar": 314597894,
+            "syscr": 43100,
+            "syscw": 39657,
+            "read_bytes": 0,
+            "write_bytes": 314572800,
+            "cancelled_write_bytes": 0
+          },
+          "query_io": {
+            "rchar": 8448517357,
+            "wchar": 13375,
+            "syscr": 1617300,
+            "syscw": 100,
+            "read_bytes": 0,
+            "write_bytes": 0,
+            "cancelled_write_bytes": 0
+          },
+          "files_before_crash": {
+            "snapshot.bin": 20,
+            "wal.bin": 160976896,
+            "vec_74.bin": 153600000
+          },
+          "exact_queries_verified": 100,
+          "recovery_queries_verified": 100,
+          "result_sha256": "0e3b7be8cc34fbf9489e76af969ddd22835ce4057682a784c0a4eca452f95508"
+        }
+      ]
+    }
+  },
+  "comparison_provenance": {
+    "baseline_commit": "184e413990062f89cdb0de32f63b1a3aba2d5438",
+    "baseline_source_sha256": "eef9d7d5981b5564e90394f9c2dc0f4b7cb4e007f8347e37d3163b2392df8435",
+    "baseline_binary_sha256": "f64ff488c88c4d4877e853fec2edc6803e87ffe0f800d5d8786b044104f9ed0c",
+    "candidate_source_sha256": "5eef1321b34265f47e8fa01543c1827d9394c4f3c16513f4ed47ae7df4792d95",
+    "candidate_binary_sha256": "92c5d051a98ee20fa632429139c8b5d7df7d888ee345c2d64ff4ed6e40639031",
+    "actual_policy_both": "process-crash; complete WAL fflush before acknowledgement; no per-commit fdatasync",
+    "power_loss_tested": false,
+    "scope": "local exact-search workload; not the formal platform score",
+    "no_concurrent_benchmarks_or_correctness_suites": true
+  }
+}
